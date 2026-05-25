@@ -1,0 +1,17 @@
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+.idea/
+.vscode/
+*.iml
+
+# Données privées CAT-UXO
+catuxo_offline_pack.zip
+catuxo_database.json
+images/
+private_data/
+
