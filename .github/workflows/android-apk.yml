@@ -40,26 +40,83 @@ jobs:
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Inspect Android files
+        run: |
+          echo "=== android/app files ==="
+          find android/app -maxdepth 2 -type f | sort
+          echo "=== android root files ==="
+          find android -maxdepth 2 -type f | sort
+
       - name: Force compileSdk 36
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          gradle = Path("android/app/build.gradle")
-          text = gradle.read_text()
+          candidates = [
+              Path("android/app/build.gradle"),
+              Path("android/app/build.gradle.kts"),
+          ]
 
+          gradle_file = None
+
+          for candidate in candidates:
+              if candidate.exists():
+                  gradle_file = candidate
+                  break
+
+          if gradle_file is None:
+              print("Aucun fichier Gradle trouvé.")
+              print("Fichiers disponibles dans android/app :")
+              for p in Path("android/app").rglob("*"):
+                  print(p)
+              raise SystemExit(1)
+
+          text = gradle_file.read_text()
+
+          # Cas Flutter/Groovy récent :
           text = text.replace(
               "compileSdk = flutter.compileSdkVersion",
               "compileSdk = 36"
           )
-
           text = text.replace(
               "targetSdk = flutter.targetSdkVersion",
               "targetSdk = 36"
           )
 
-          gradle.write_text(text)
-          print("compileSdk et targetSdk forcés à 36")
+          # Cas Kotlin DSL :
+          text = text.replace(
+              "compileSdk = flutter.compileSdkVersion",
+              "compileSdk = 36"
+          )
+          text = text.replace(
+              "targetSdk = flutter.targetSdkVersion",
+              "targetSdk = 36"
+          )
+
+          # Cas ancien Groovy :
+          text = text.replace(
+              "compileSdkVersion flutter.compileSdkVersion",
+              "compileSdkVersion 36"
+          )
+          text = text.replace(
+              "targetSdkVersion flutter.targetSdkVersion",
+              "targetSdkVersion 36"
+          )
+
+          # Sécurité si une valeur numérique existe déjà :
+          text = re.sub(r"compileSdk\s*=\s*\d+", "compileSdk = 36", text)
+          text = re.sub(r"targetSdk\s*=\s*\d+", "targetSdk = 36", text)
+          text = re.sub(r"compileSdkVersion\s+\d+", "compileSdkVersion 36", text)
+          text = re.sub(r"targetSdkVersion\s+\d+", "targetSdkVersion 36", text)
+
+          gradle_file.write_text(text)
+
+          print(f"Fichier Gradle corrigé : {gradle_file}")
+          print("=== Contenu corrigé extrait ===")
+          for line in text.splitlines():
+              if "compileSdk" in line or "targetSdk" in line or "minSdk" in line:
+                  print(line)
           PY
 
       - name: Get dependencies
