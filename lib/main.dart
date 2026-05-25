@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -208,27 +209,23 @@ class DatabaseStorage {
     return OfflineDatabase.fromJson(jsonMap);
   }
 
-  static Future<File> findZipInDownloads() async {
-    final candidates = [
-      File('/storage/emulated/0/Download/catuxo_offline_pack.zip'),
-      File('/storage/emulated/0/Downloads/catuxo_offline_pack.zip'),
-      File('/sdcard/Download/catuxo_offline_pack.zip'),
-      File('/sdcard/Downloads/catuxo_offline_pack.zip'),
-    ];
+  static Future<OfflineDatabase> importZip() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+      allowMultiple: false,
+      withData: true,
+    );
 
-    for (final file in candidates) {
-      if (await file.exists()) {
-        return file;
-      }
+    if (result == null || result.files.isEmpty) {
+      throw Exception('Import annulé.');
     }
 
-    throw Exception(
-      'catuxo_offline_pack.zip introuvable. Copie le ZIP dans le dossier Téléchargements Android.',
-    );
-  }
+    final pickedFile = result.files.single;
 
-  static Future<OfflineDatabase> importZip() async {
-    final zipFile = await findZipInDownloads();
+    if (pickedFile.bytes == null) {
+      throw Exception('Impossible de lire le fichier ZIP sélectionné.');
+    }
 
     final appDir = await appDataDir();
 
@@ -238,8 +235,7 @@ class DatabaseStorage {
 
     await appDir.create(recursive: true);
 
-    final bytes = await zipFile.readAsBytes();
-    final archive = ZipDecoder().decodeBytes(bytes);
+    final archive = ZipDecoder().decodeBytes(pickedFile.bytes!);
 
     for (final file in archive.files) {
       final outputPath = '${appDir.path}/${file.name}';
@@ -260,8 +256,8 @@ class DatabaseStorage {
       throw Exception('catuxo_database.json absent du ZIP.');
     }
 
-    final text = await dbFile.readAsString();
-    final jsonMap = jsonDecode(text) as Map<String, dynamic>;
+    final dbText = await dbFile.readAsString();
+    final jsonMap = jsonDecode(dbText) as Map<String, dynamic>;
     return OfflineDatabase.fromJson(jsonMap);
   }
 
@@ -612,14 +608,14 @@ class EmptyDatabaseView extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Copie catuxo_offline_pack.zip dans le dossier Téléchargements Android, puis lance l’import.',
+                'Sélectionne le fichier catuxo_offline_pack.zip pour installer la base hors ligne.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: onImport,
                 icon: const Icon(Icons.upload_file),
-                label: const Text('Importer depuis Téléchargements'),
+                label: const Text('Choisir le fichier ZIP'),
               ),
             ],
           ),
