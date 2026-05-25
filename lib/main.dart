@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 void main() {
@@ -209,22 +210,24 @@ class DatabaseStorage {
     return OfflineDatabase.fromJson(jsonMap);
   }
 
-  static Future<OfflineDatabase> importZip() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-      allowMultiple: false,
-      withData: true,
-    );
+  static const MethodChannel _filePickerChannel =
+      MethodChannel('uxo_offline_fr/file_picker');
 
-    if (result == null || result.files.isEmpty) {
-      throw Exception('Import annulé.');
+  static Future<OfflineDatabase> importZip() async {
+    final dynamic result = await _filePickerChannel.invokeMethod('pickZip');
+
+    if (result == null) {
+      throw Exception('Aucun fichier ZIP sélectionné.');
     }
 
-    final pickedFile = result.files.single;
+    final Uint8List bytes;
 
-    if (pickedFile.bytes == null) {
-      throw Exception('Impossible de lire le fichier ZIP sélectionné.');
+    if (result is Uint8List) {
+      bytes = result;
+    } else if (result is List) {
+      bytes = Uint8List.fromList(result.cast<int>());
+    } else {
+      throw Exception('Format de fichier reçu invalide.');
     }
 
     final appDir = await appDataDir();
@@ -235,7 +238,7 @@ class DatabaseStorage {
 
     await appDir.create(recursive: true);
 
-    final archive = ZipDecoder().decodeBytes(pickedFile.bytes!);
+    final archive = ZipDecoder().decodeBytes(bytes);
 
     for (final file in archive.files) {
       final outputPath = '${appDir.path}/${file.name}';
