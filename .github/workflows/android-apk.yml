@@ -26,9 +26,6 @@ jobs:
         with:
           channel: stable
 
-      - name: Show Flutter version
-        run: flutter --version
-
       - name: Generate Android platform files
         run: |
           flutter create --platforms=android --project-name uxo_offline_fr .
@@ -43,65 +40,22 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Force compileSdk 36 everywhere
+      - name: Force app compileSdk 36
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          roots = [
-              Path("android"),
-              Path.home() / ".pub-cache",
-          ]
-
-          patched = []
-
-          def patch_file(path: Path):
-              try:
-                  text = path.read_text()
-              except UnicodeDecodeError:
-                  return
-
-              original = text
-
-              # Kotlin DSL / Flutter récent
-              text = text.replace("compileSdk = flutter.compileSdkVersion", "compileSdk = 36")
-              text = text.replace("targetSdk = flutter.targetSdkVersion", "targetSdk = 36")
-
-              # Groovy / ancien format
-              text = text.replace("compileSdkVersion flutter.compileSdkVersion", "compileSdkVersion 36")
-              text = text.replace("targetSdkVersion flutter.targetSdkVersion", "targetSdkVersion 36")
-
-              # Valeurs numériques existantes
-              text = re.sub(r"compileSdk\s*=\s*\d+", "compileSdk = 36", text)
-              text = re.sub(r"targetSdk\s*=\s*\d+", "targetSdk = 36", text)
-              text = re.sub(r"compileSdkVersion\s+\d+", "compileSdkVersion 36", text)
-              text = re.sub(r"targetSdkVersion\s+\d+", "targetSdkVersion 36", text)
-
-              if text != original:
-                  path.write_text(text)
-                  patched.append(str(path))
-
-          for root in roots:
-              if not root.exists():
-                  continue
-
-              for name in ["build.gradle", "build.gradle.kts"]:
-                  for path in root.rglob(name):
-                      patch_file(path)
-
-          print("Fichiers Gradle patchés :")
-          for path in patched:
-              print(path)
-
-          if not patched:
-              raise SystemExit("Aucun fichier Gradle patché.")
-          PY
-
-      - name: Inspect compileSdk values
-        run: |
-          echo "=== compileSdk dans le projet ==="
-          grep -R "compileSdk" android ~/.pub-cache/hosted -n | head -n 80 || true
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
+            sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 36/g' android/app/build.gradle.kts
+            grep -n "compileSdk\|targetSdk\|minSdk" android/app/build.gradle.kts
+          elif [ -f android/app/build.gradle ]; then
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
+            sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 36/g' android/app/build.gradle
+            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
+            sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 36/g' android/app/build.gradle
+            grep -n "compileSdk\|targetSdk\|minSdk" android/app/build.gradle
+          else
+            find android/app -maxdepth 2 -type f | sort
+            exit 1
+          fi
 
       - name: Analyze project
         run: flutter analyze --no-fatal-warnings

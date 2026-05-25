@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -209,29 +208,27 @@ class DatabaseStorage {
     return OfflineDatabase.fromJson(jsonMap);
   }
 
-  static Future<OfflineDatabase> importZip() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-      allowMultiple: false,
-      withData: false,
+  static Future<File> findZipInDownloads() async {
+    final candidates = [
+      File('/storage/emulated/0/Download/catuxo_offline_pack.zip'),
+      File('/storage/emulated/0/Downloads/catuxo_offline_pack.zip'),
+      File('/sdcard/Download/catuxo_offline_pack.zip'),
+      File('/sdcard/Downloads/catuxo_offline_pack.zip'),
+    ];
+
+    for (final file in candidates) {
+      if (await file.exists()) {
+        return file;
+      }
+    }
+
+    throw Exception(
+      'catuxo_offline_pack.zip introuvable. Copie le ZIP dans le dossier Téléchargements Android.',
     );
+  }
 
-    if (result == null || result.files.isEmpty) {
-      throw Exception('Import annulé.');
-    }
-
-    final zipPath = result.files.single.path;
-
-    if (zipPath == null) {
-      throw Exception('Chemin du fichier ZIP introuvable.');
-    }
-
-    final zipFile = File(zipPath);
-
-    if (!await zipFile.exists()) {
-      throw Exception('Fichier ZIP introuvable.');
-    }
+  static Future<OfflineDatabase> importZip() async {
+    final zipFile = await findZipInDownloads();
 
     final appDir = await appDataDir();
 
@@ -615,14 +612,14 @@ class EmptyDatabaseView extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Importe le fichier catuxo_offline_pack.zip pour consulter les fiches hors ligne.',
+                'Copie catuxo_offline_pack.zip dans le dossier Téléchargements Android, puis lance l’import.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: onImport,
                 icon: const Icon(Icons.upload_file),
-                label: const Text('Importer le ZIP'),
+                label: const Text('Importer depuis Téléchargements'),
               ),
             ],
           ),
