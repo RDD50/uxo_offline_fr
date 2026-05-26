@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,6 +29,8 @@ class UxoOfflineApp extends StatelessWidget {
 }
 
 class NativeFolderReader {
+  static final Map<String, Future<Uint8List>> _bytesCache = {};
+
   static const MethodChannel _channel =
       MethodChannel('uxo_offline_fr/folder_reader');
 
@@ -53,15 +56,22 @@ class NativeFolderReader {
   static Future<Uint8List> readBytes({
     required String treeUri,
     required String path,
-  }) async {
-    final result = await _channel.invokeMethod<Uint8List>(
-      'readBytes',
-      {'treeUri': treeUri, 'path': path},
-    );
+  }) {
+    final key = '\$treeUri|\$path';
 
-    if (result == null) {
-      throw Exception('Image illisible : $path');
-    }
+    return _bytesCache.putIfAbsent(key, () async {
+      final result = await _channel.invokeMethod<Uint8List>(
+        'readBytes',
+        {'treeUri': treeUri, 'path': path},
+      );
+
+      if (result == null) {
+        throw Exception('Image illisible : \$path');
+      }
+
+      return result;
+    });
+  }
 
     return result;
   }
@@ -967,7 +977,7 @@ class SimilarItemsCard extends StatelessWidget {
         .toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    final selected = similar.take(10).map((e) => e.key).toList();
+    final selected = similar.take(6).map((e) => e.key).toList();
 
     if (selected.isEmpty) {
       return const InfoCard(
