@@ -1,7 +1,3 @@
-
-cd ~/uxo_offline_app
-
-cat > lib/main.dart <<'DART'
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -37,8 +33,7 @@ class NativeFolderReader {
       MethodChannel('uxo_offline_fr/folder_reader');
 
   static Future<String?> pickFolder() async {
-    final result = await _channel.invokeMethod<String>('pickFolder');
-    return result;
+    return _channel.invokeMethod<String>('pickFolder');
   }
 
   static Future<String> readText({
@@ -47,14 +42,11 @@ class NativeFolderReader {
   }) async {
     final result = await _channel.invokeMethod<String>(
       'readText',
-      {
-        'treeUri': treeUri,
-        'path': path,
-      },
+      {'treeUri': treeUri, 'path': path},
     );
 
     if (result == null) {
-      throw Exception('Lecture texte impossible : $path');
+      throw Exception('Fichier illisible : $path');
     }
 
     return result;
@@ -66,14 +58,11 @@ class NativeFolderReader {
   }) async {
     final result = await _channel.invokeMethod<Uint8List>(
       'readBytes',
-      {
-        'treeUri': treeUri,
-        'path': path,
-      },
+      {'treeUri': treeUri, 'path': path},
     );
 
     if (result == null) {
-      throw Exception('Lecture image impossible : $path');
+      throw Exception('Image illisible : $path');
     }
 
     return result;
@@ -83,35 +72,29 @@ class NativeFolderReader {
 class FolderConfig {
   static const String fileName = 'selected_folder_uri.txt';
 
-  static Future<File> _configFile() async {
+  static Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}/$fileName');
   }
 
-  static Future<String?> loadTreeUri() async {
-    final file = await _configFile();
+  static Future<String?> load() async {
+    final file = await _file();
 
     if (!await file.exists()) {
       return null;
     }
 
-    final value = await file.readAsString();
-    final trimmed = value.trim();
-
-    if (trimmed.isEmpty) {
-      return null;
-    }
-
-    return trimmed;
+    final value = (await file.readAsString()).trim();
+    return value.isEmpty ? null : value;
   }
 
-  static Future<void> saveTreeUri(String treeUri) async {
-    final file = await _configFile();
-    await file.writeAsString(treeUri);
+  static Future<void> save(String uri) async {
+    final file = await _file();
+    await file.writeAsString(uri);
   }
 
   static Future<void> clear() async {
-    final file = await _configFile();
+    final file = await _file();
 
     if (await file.exists()) {
       await file.delete();
@@ -119,148 +102,187 @@ class FolderConfig {
   }
 }
 
-class OfflineDatabase {
-  final Map<String, dynamic> stats;
-  final List<HazardItem> items;
-  final List<GlossaryTerm> glossary;
+class UxoDatabase {
+  final List<UxoItem> items;
+  final List<GlossaryItem> glossary;
+  final int count;
 
-  OfflineDatabase({
-    required this.stats,
+  const UxoDatabase({
     required this.items,
     required this.glossary,
+    required this.count,
   });
 
-  factory OfflineDatabase.fromJson(Map<String, dynamic> json) {
-    return OfflineDatabase(
-      stats: Map<String, dynamic>.from(json['stats'] ?? {}),
-      items: ((json['items'] ?? []) as List)
-          .whereType<Map>()
-          .map((e) => HazardItem.fromJson(Map<String, dynamic>.from(e)))
-          .toList(),
-      glossary: ((json['glossary'] ?? []) as List)
-          .whereType<Map>()
-          .map((e) => GlossaryTerm.fromJson(Map<String, dynamic>.from(e)))
-          .toList(),
+  factory UxoDatabase.fromJson(Map<String, dynamic> json) {
+    final rawItems = asList(json['items']);
+    final rawGlossary = asList(json['glossary']);
+
+    final items = rawItems
+        .whereType<Map>()
+        .map((e) => UxoItem.fromJson(Map<String, dynamic>.from(e)))
+        .where((e) => e.name.trim().isNotEmpty)
+        .toList();
+
+    final glossary = rawGlossary
+        .whereType<Map>()
+        .map((e) => GlossaryItem.fromJson(Map<String, dynamic>.from(e)))
+        .where((e) => e.term.trim().isNotEmpty)
+        .toList();
+
+    return UxoDatabase(
+      items: items,
+      glossary: glossary,
+      count: asInt(json['count'], fallback: items.length),
     );
   }
 }
 
-class HazardItem {
+class UxoItem {
   final String id;
   final String name;
   final String slug;
   final String category;
   final String categorySlug;
-  final List<String> countries;
-  final List<HazardImage> images;
-  final String descriptionText;
-  final Map<String, dynamic> identification;
-  final List<String> variants;
-  final List<String> technologyKeywords;
+  final String type;
+  final String country;
+  final String description;
   final String sourceUrl;
-  final String safetyNoticeFr;
+  final List<String> keywords;
+  final List<String> variants;
+  final List<UxoImage> images;
+  final Map<String, dynamic> raw;
 
-  HazardItem({
+  const UxoItem({
     required this.id,
     required this.name,
     required this.slug,
     required this.category,
     required this.categorySlug,
-    required this.countries,
-    required this.images,
-    required this.descriptionText,
-    required this.identification,
-    required this.variants,
-    required this.technologyKeywords,
+    required this.type,
+    required this.country,
+    required this.description,
     required this.sourceUrl,
-    required this.safetyNoticeFr,
+    required this.keywords,
+    required this.variants,
+    required this.images,
+    required this.raw,
   });
 
-  factory HazardItem.fromJson(Map<String, dynamic> json) {
-    return HazardItem(
-      id: '${json['id'] ?? ''}',
-      name: '${json['name'] ?? ''}',
-      slug: '${json['slug'] ?? ''}',
-      category: '${json['category'] ?? ''}',
-      categorySlug: '${json['categorySlug'] ?? ''}',
-      countries: ((json['countries'] ?? []) as List)
-          .map((e) => '$e')
-          .where((e) => e.trim().isNotEmpty)
-          .toList(),
-      images: ((json['images'] ?? []) as List)
+  factory UxoItem.fromJson(Map<String, dynamic> json) {
+    final categoryObj = json['category'];
+    final typeObj = json['type'];
+    final countryObj = json['country'];
+
+    final images = asList(json['images'])
+        .whereType<Map>()
+        .map((e) => UxoImage.fromJson(Map<String, dynamic>.from(e)))
+        .where((e) => e.path.trim().isNotEmpty)
+        .toList();
+
+    final keywords = <String>{
+      ...asStringList(json['technologyKeywords']),
+      ...asStringList(json['keywords']),
+      ...asList(json['meta_keys'])
           .whereType<Map>()
-          .map((e) => HazardImage.fromJson(Map<String, dynamic>.from(e)))
-          .toList(),
-      descriptionText: stripHtml('${json['descriptionText'] ?? ''}'),
-      identification:
-          Map<String, dynamic>.from(json['identification'] ?? <String, dynamic>{}),
-      variants: ((json['variants'] ?? []) as List).map((e) => '$e').toList(),
-      technologyKeywords:
-          ((json['technologyKeywords'] ?? []) as List).map((e) => '$e').toList(),
-      sourceUrl: '${json['sourceUrl'] ?? ''}',
-      safetyNoticeFr: '${json['safetyNoticeFr'] ?? ''}',
+          .map((e) => textOf(e['name']))
+          .where((e) => e.trim().isNotEmpty),
+    }.toList();
+
+    final variants = <String>{
+      ...asStringList(json['variants']),
+      ...asStringList(json['aliases']),
+    }.toList();
+
+    return UxoItem(
+      id: textOf(json['id']),
+      name: textOf(json['name']),
+      slug: textOf(json['slug']),
+      category: textFromObject(categoryObj, fallback: textOf(json['categoryName'])),
+      categorySlug: slugFromObject(categoryObj),
+      type: textFromObject(typeObj, fallback: textOf(json['typeName'])),
+      country: textFromObject(countryObj, fallback: textOf(json['countryName'])),
+      description: cleanText(
+        firstNotEmpty([
+          textOf(json['descriptionText']),
+          textOf(json['description']),
+          textOf(json['html']),
+          textOf(json['content']),
+          textOf(json['body']),
+        ]),
+      ),
+      sourceUrl: firstNotEmpty([
+        textOf(json['sourceUrl']),
+        textOf(json['permalink']),
+        textOf(json['url']),
+      ]),
+      keywords: keywords,
+      variants: variants,
+      images: images,
+      raw: json,
     );
   }
 }
 
-class HazardImage {
+class UxoImage {
   final String path;
   final String caption;
-  final bool isPrimary;
   final bool placeholder;
 
-  HazardImage({
+  const UxoImage({
     required this.path,
     required this.caption,
-    required this.isPrimary,
     required this.placeholder,
   });
 
-  factory HazardImage.fromJson(Map<String, dynamic> json) {
-    return HazardImage(
-      path: '${json['path'] ?? ''}',
-      caption: '${json['caption'] ?? ''}',
-      isPrimary: json['isPrimary'] == true,
+  factory UxoImage.fromJson(Map<String, dynamic> json) {
+    return UxoImage(
+      path: firstNotEmpty([
+        textOf(json['path']),
+        textOf(json['localPath']),
+        textOf(json['file']),
+      ]),
+      caption: firstNotEmpty([
+        textOf(json['caption']),
+        textOf(json['filename']),
+      ]),
       placeholder: json['placeholder'] == true,
     );
   }
 }
 
-class GlossaryTerm {
+class GlossaryItem {
   final String term;
   final String fullName;
   final String category;
-  final String shortDescription;
-  final List<String> appearsIn;
+  final String description;
 
-  GlossaryTerm({
+  const GlossaryItem({
     required this.term,
     required this.fullName,
     required this.category,
-    required this.shortDescription,
-    required this.appearsIn,
+    required this.description,
   });
 
-  factory GlossaryTerm.fromJson(Map<String, dynamic> json) {
-    return GlossaryTerm(
-      term: '${json['term'] ?? ''}',
-      fullName: '${json['fullName'] ?? ''}',
-      category: '${json['category'] ?? ''}',
-      shortDescription: '${json['shortDescription'] ?? ''}',
-      appearsIn: ((json['appearsIn'] ?? []) as List).map((e) => '$e').toList(),
+  factory GlossaryItem.fromJson(Map<String, dynamic> json) {
+    return GlossaryItem(
+      term: firstNotEmpty([
+        textOf(json['term']),
+        textOf(json['name']),
+      ]),
+      fullName: firstNotEmpty([
+        textOf(json['fullName']),
+        textOf(json['full_name']),
+      ]),
+      category: textOf(json['category']),
+      description: cleanText(
+        firstNotEmpty([
+          textOf(json['shortDescription']),
+          textOf(json['description']),
+          textOf(json['definition']),
+        ]),
+      ),
     );
   }
-}
-
-String stripHtml(String input) {
-  return input
-      .replaceAll(RegExp(r'<[^>]*>'), ' ')
-      .replaceAll('&nbsp;', ' ')
-      .replaceAll('&amp;', '&')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&#039;', "'")
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
 }
 
 class HomeScreen extends StatefulWidget {
@@ -270,7 +292,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-enum HomeTab {
+enum ScreenTab {
   fiches,
   categories,
   lexique,
@@ -279,10 +301,10 @@ enum HomeTab {
 
 class _HomeScreenState extends State<HomeScreen> {
   String? treeUri;
-  OfflineDatabase? database;
+  UxoDatabase? database;
   bool loading = true;
   String query = '';
-  HomeTab tab = HomeTab.fiches;
+  ScreenTab tab = ScreenTab.fiches;
 
   @override
   void initState() {
@@ -291,14 +313,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> loadSavedFolder() async {
-    setState(() {
-      loading = true;
-    });
+    setState(() => loading = true);
 
     try {
-      final savedUri = await FolderConfig.loadTreeUri();
+      final saved = await FolderConfig.load();
 
-      if (savedUri == null) {
+      if (saved == null) {
         setState(() {
           treeUri = null;
           database = null;
@@ -306,14 +326,12 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      await loadDatabaseFromFolder(savedUri);
+      await loadDatabase(saved);
     } catch (e) {
       await FolderConfig.clear();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur lecture dossier : $e')),
-        );
+        showMessage('Dossier oublié : $e');
       }
 
       setState(() {
@@ -321,53 +339,54 @@ class _HomeScreenState extends State<HomeScreen> {
         database = null;
       });
     } finally {
-      setState(() {
-        loading = false;
-      });
+      if (mounted) {
+        setState(() => loading = false);
+      }
     }
   }
 
   Future<void> chooseFolder() async {
-    setState(() {
-      loading = true;
-    });
+    setState(() => loading = true);
 
     try {
-      final selectedUri = await NativeFolderReader.pickFolder();
+      final selected = await NativeFolderReader.pickFolder();
 
-      if (selectedUri == null || selectedUri.trim().isEmpty) {
+      if (selected == null || selected.trim().isEmpty) {
         throw Exception('Aucun dossier sélectionné.');
       }
 
-      await FolderConfig.saveTreeUri(selectedUri);
-      await loadDatabaseFromFolder(selectedUri);
+      await FolderConfig.save(selected);
+      await loadDatabase(selected);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur sélection dossier : $e')),
-        );
+        showMessage('Erreur dossier : $e');
       }
     } finally {
-      setState(() {
-        loading = false;
-      });
+      if (mounted) {
+        setState(() => loading = false);
+      }
     }
   }
 
-  Future<void> loadDatabaseFromFolder(String selectedUri) async {
+  Future<void> loadDatabase(String uri) async {
     final text = await NativeFolderReader.readText(
-      treeUri: selectedUri,
+      treeUri: uri,
       path: 'catuxo_database.json',
     );
 
-    final jsonMap = jsonDecode(text) as Map<String, dynamic>;
-    final db = OfflineDatabase.fromJson(jsonMap);
+    final decoded = jsonDecode(text);
+
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('catuxo_database.json invalide.');
+    }
+
+    final db = UxoDatabase.fromJson(decoded);
 
     setState(() {
-      treeUri = selectedUri;
+      treeUri = uri;
       database = db;
-      tab = HomeTab.fiches;
       query = '';
+      tab = ScreenTab.fiches;
     });
   }
 
@@ -378,11 +397,17 @@ class _HomeScreenState extends State<HomeScreen> {
       treeUri = null;
       database = null;
       query = '';
-      tab = HomeTab.fiches;
+      tab = ScreenTab.fiches;
     });
   }
 
-  List<HazardItem> get filteredItems {
+  void showMessage(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text)),
+    );
+  }
+
+  List<UxoItem> get filteredItems {
     final db = database;
 
     if (db == null) {
@@ -398,24 +423,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return db.items.where((item) {
       return item.name.toLowerCase().contains(q) ||
           item.category.toLowerCase().contains(q) ||
-          item.descriptionText.toLowerCase().contains(q) ||
-          item.technologyKeywords.any((k) => k.toLowerCase().contains(q));
+          item.type.toLowerCase().contains(q) ||
+          item.country.toLowerCase().contains(q) ||
+          item.description.toLowerCase().contains(q) ||
+          item.keywords.any((k) => k.toLowerCase().contains(q));
     }).toList();
   }
 
-  Map<String, List<HazardItem>> get itemsByCategory {
+  Map<String, List<UxoItem>> get byCategory {
     final db = database;
+    final map = <String, List<UxoItem>>{};
 
     if (db == null) {
-      return {};
+      return map;
     }
 
-    final map = <String, List<HazardItem>>{};
-
     for (final item in db.items) {
-      final category = item.category.trim().isEmpty ? 'Non classé' : item.category;
-      map.putIfAbsent(category, () => []);
-      map[category]!.add(item);
+      final key = item.category.trim().isEmpty ? 'Non classé' : item.category;
+      map.putIfAbsent(key, () => []);
+      map[key]!.add(item);
     }
 
     final entries = map.entries.toList()
@@ -424,7 +450,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Map.fromEntries(entries);
   }
 
-  Map<String, GlossaryTerm> get glossaryMap {
+  Map<String, GlossaryItem> get glossaryMap {
     final db = database;
 
     if (db == null) {
@@ -432,7 +458,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return {
-      for (final term in db.glossary) term.term.toLowerCase(): term,
+      for (final item in db.glossary) item.term.toLowerCase(): item,
     };
   }
 
@@ -445,38 +471,34 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('UXO Offline FR'),
         actions: [
           IconButton(
+            tooltip: 'Choisir le dossier',
             onPressed: loading ? null : chooseFolder,
             icon: const Icon(Icons.folder_open),
-            tooltip: 'Choisir le dossier de données',
           ),
           IconButton(
+            tooltip: 'Réinitialiser',
             onPressed: loading ? null : resetFolder,
             icon: const Icon(Icons.refresh),
-            tooltip: 'Changer de dossier',
           ),
         ],
       ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : db == null
-              ? EmptyFolderView(onChooseFolder: chooseFolder)
+              ? EmptyState(onChoose: chooseFolder)
               : Column(
                   children: [
-                    DatabaseHeader(database: db),
-                    NavigationTabs(
+                    HeaderStats(database: db),
+                    TabSelector(
                       selected: tab,
-                      onChanged: (value) {
-                        setState(() {
-                          tab = value;
-                        });
-                      },
+                      onChanged: (value) => setState(() => tab = value),
                     ),
                     Expanded(
                       child: switch (tab) {
-                        HomeTab.fiches => buildFichesView(db),
-                        HomeTab.categories => buildCategoriesView(),
-                        HomeTab.lexique => buildGlossaryView(db),
-                        HomeTab.securite => const SafetyView(),
+                        ScreenTab.fiches => buildListView(),
+                        ScreenTab.categories => buildCategoriesView(),
+                        ScreenTab.lexique => buildGlossaryView(db),
+                        ScreenTab.securite => const SafetyView(),
                       },
                     ),
                   ],
@@ -484,7 +506,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget buildFichesView(OfflineDatabase db) {
+  Widget buildListView() {
     final items = filteredItems;
 
     return Column(
@@ -493,7 +515,7 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: TextField(
             decoration: InputDecoration(
-              hintText: 'Rechercher une fiche, catégorie ou mot-clé',
+              hintText: 'Rechercher une fiche',
               prefixIcon: const Icon(Icons.search),
               filled: true,
               fillColor: Colors.white,
@@ -502,35 +524,30 @@ class _HomeScreenState extends State<HomeScreen> {
                 borderSide: BorderSide.none,
               ),
             ),
-            onChanged: (value) {
-              setState(() {
-                query = value;
-              });
-            },
+            onChanged: (value) => setState(() => query = value),
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
               '${items.length} fiche(s)',
               style: const TextStyle(
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 color: Colors.black54,
               ),
             ),
           ),
         ),
-        const SizedBox(height: 8),
         Expanded(
           child: ListView.builder(
             itemCount: items.length,
             itemBuilder: (context, index) {
-              return HazardListCard(
+              return UxoListTile(
                 item: items[index],
                 treeUri: treeUri!,
-                glossaryMap: glossaryMap,
+                glossary: glossaryMap,
               );
             },
           ),
@@ -540,7 +557,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget buildCategoriesView() {
-    final entries = itemsByCategory.entries.toList();
+    final entries = byCategory.entries.toList();
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
@@ -553,7 +570,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListTile(
             title: Text(
               entry.key,
-              style: const TextStyle(fontWeight: FontWeight.w700),
+              style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             subtitle: Text('${entry.value.length} fiche(s)'),
             trailing: const Icon(Icons.chevron_right),
@@ -562,10 +579,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (_) => CategoryScreen(
-                    categoryName: entry.key,
+                    title: entry.key,
                     items: entry.value,
                     treeUri: treeUri!,
-                    glossaryMap: glossaryMap,
+                    glossary: glossaryMap,
                   ),
                 ),
               );
@@ -576,7 +593,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget buildGlossaryView(OfflineDatabase db) {
+  Widget buildGlossaryView(UxoDatabase db) {
     final terms = db.glossary.toList()
       ..sort((a, b) => a.term.toLowerCase().compareTo(b.term.toLowerCase()));
 
@@ -591,16 +608,14 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListTile(
             title: Text(
               term.term,
-              style: const TextStyle(fontWeight: FontWeight.w800),
+              style: const TextStyle(fontWeight: FontWeight.w900),
             ),
             subtitle: Text(
-              term.fullName.trim().isEmpty
-                  ? term.shortDescription
-                  : term.fullName,
+              term.fullName.trim().isEmpty ? term.description : term.fullName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            onTap: () {
-              showGlossaryDialog(context, term);
-            },
+            onTap: () => showGlossaryDialog(context, term),
           ),
         );
       },
@@ -608,12 +623,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class EmptyFolderView extends StatelessWidget {
-  final VoidCallback onChooseFolder;
+class EmptyState extends StatelessWidget {
+  final VoidCallback onChoose;
 
-  const EmptyFolderView({
+  const EmptyState({
     super.key,
-    required this.onChooseFolder,
+    required this.onChoose,
   });
 
   @override
@@ -626,26 +641,27 @@ class EmptyFolderView extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.folder_open, size: 56),
+              const Icon(Icons.folder_open, size: 58),
               const SizedBox(height: 16),
               const Text(
-                'Aucun dossier de données sélectionné',
+                'Aucun dossier sélectionné',
                 style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 20,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
                 ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 10),
               const Text(
-                'Choisis le dossier catuxo_offline_pack contenant catuxo_database.json et le dossier images.',
+                'Choisis le dossier catuxo_offline_pack dans Téléchargements. '
+                'Il doit contenir catuxo_database.json et le dossier images.',
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
               FilledButton.icon(
-                onPressed: onChooseFolder,
+                onPressed: onChoose,
                 icon: const Icon(Icons.folder_open),
-                label: const Text('Choisir le dossier de données'),
+                label: const Text('Choisir le dossier'),
               ),
             ],
           ),
@@ -655,76 +671,44 @@ class EmptyFolderView extends StatelessWidget {
   }
 }
 
-class DatabaseHeader extends StatelessWidget {
-  final OfflineDatabase database;
+class HeaderStats extends StatelessWidget {
+  final UxoDatabase database;
 
-  const DatabaseHeader({
+  const HeaderStats({
     super.key,
     required this.database,
   });
 
   @override
   Widget build(BuildContext context) {
-    final stats = database.stats;
+    final imageCount = database.items.where((e) => e.images.isNotEmpty).length;
 
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.deepOrange.shade50,
         borderRadius: BorderRadius.circular(18),
       ),
       child: Wrap(
-        spacing: 16,
+        spacing: 8,
         runSpacing: 8,
         children: [
-          StatChip(
-            label: 'Fiches',
-            value: '${stats['items'] ?? database.items.length}',
-          ),
-          StatChip(
-            label: 'Lexique',
-            value: '${stats['glossaryTerms'] ?? database.glossary.length}',
-          ),
-          StatChip(
-            label: 'Images',
-            value: '${stats['downloadedImages'] ?? '-'}',
-          ),
-          StatChip(
-            label: 'Placeholder',
-            value: '${stats['placeholderImages'] ?? '-'}',
-          ),
+          Chip(label: Text('Fiches : ${database.items.length}')),
+          Chip(label: Text('Images : $imageCount')),
+          Chip(label: Text('Lexique : ${database.glossary.length}')),
         ],
       ),
     );
   }
 }
 
-class StatChip extends StatelessWidget {
-  final String label;
-  final String value;
+class TabSelector extends StatelessWidget {
+  final ScreenTab selected;
+  final ValueChanged<ScreenTab> onChanged;
 
-  const StatChip({
-    super.key,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Chip(
-      label: Text('$label : $value'),
-      backgroundColor: Colors.white,
-    );
-  }
-}
-
-class NavigationTabs extends StatelessWidget {
-  final HomeTab selected;
-  final ValueChanged<HomeTab> onChanged;
-
-  const NavigationTabs({
+  const TabSelector({
     super.key,
     required this.selected,
     required this.onChanged,
@@ -738,78 +722,48 @@ class NavigationTabs extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12),
         scrollDirection: Axis.horizontal,
         children: [
-          TabButton(
-            label: 'Fiches',
-            icon: Icons.list,
-            selected: selected == HomeTab.fiches,
-            onTap: () => onChanged(HomeTab.fiches),
-          ),
-          TabButton(
-            label: 'Catégories',
-            icon: Icons.category,
-            selected: selected == HomeTab.categories,
-            onTap: () => onChanged(HomeTab.categories),
-          ),
-          TabButton(
-            label: 'Lexique',
-            icon: Icons.menu_book,
-            selected: selected == HomeTab.lexique,
-            onTap: () => onChanged(HomeTab.lexique),
-          ),
-          TabButton(
-            label: 'Sécurité',
-            icon: Icons.warning_amber,
-            selected: selected == HomeTab.securite,
-            onTap: () => onChanged(HomeTab.securite),
-          ),
+          tabButton('Fiches', Icons.list, ScreenTab.fiches),
+          tabButton('Catégories', Icons.category, ScreenTab.categories),
+          tabButton('Lexique', Icons.menu_book, ScreenTab.lexique),
+          tabButton('Sécurité', Icons.warning_amber, ScreenTab.securite),
         ],
       ),
     );
   }
-}
 
-class TabButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const TabButton({
-    super.key,
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
+  Widget tabButton(String label, IconData icon, ScreenTab value) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: ChoiceChip(
-        selected: selected,
+        selected: selected == value,
         avatar: Icon(icon, size: 18),
         label: Text(label),
-        onSelected: (_) => onTap(),
+        onSelected: (_) => onChanged(value),
       ),
     );
   }
 }
 
-class HazardListCard extends StatelessWidget {
-  final HazardItem item;
+class UxoListTile extends StatelessWidget {
+  final UxoItem item;
   final String treeUri;
-  final Map<String, GlossaryTerm> glossaryMap;
+  final Map<String, GlossaryItem> glossary;
 
-  const HazardListCard({
+  const UxoListTile({
     super.key,
     required this.item,
     required this.treeUri,
-    required this.glossaryMap,
+    required this.glossary,
   });
 
   @override
   Widget build(BuildContext context) {
+    final subtitle = [
+      if (item.category.trim().isNotEmpty) item.category,
+      if (item.country.trim().isNotEmpty) item.country,
+      if (item.images.isNotEmpty) 'image',
+    ].join(' · ');
+
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       child: ListTile(
@@ -817,21 +771,16 @@ class HazardListCard extends StatelessWidget {
           item.name,
           style: const TextStyle(fontWeight: FontWeight.w800),
         ),
-        subtitle: Text(
-          [
-            if (item.category.trim().isNotEmpty) item.category,
-            if (item.countries.isNotEmpty) item.countries.join(', '),
-          ].join(' · '),
-        ),
+        subtitle: Text(subtitle.isEmpty ? 'Fiche UXO' : subtitle),
         trailing: const Icon(Icons.chevron_right),
         onTap: () {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => HazardDetailScreen(
+              builder: (_) => DetailScreen(
                 item: item,
                 treeUri: treeUri,
-                glossaryMap: glossaryMap,
+                glossary: glossary,
               ),
             ),
           );
@@ -842,35 +791,33 @@ class HazardListCard extends StatelessWidget {
 }
 
 class CategoryScreen extends StatelessWidget {
-  final String categoryName;
-  final List<HazardItem> items;
+  final String title;
+  final List<UxoItem> items;
   final String treeUri;
-  final Map<String, GlossaryTerm> glossaryMap;
+  final Map<String, GlossaryItem> glossary;
 
   const CategoryScreen({
     super.key,
-    required this.categoryName,
+    required this.title,
     required this.items,
     required this.treeUri,
-    required this.glossaryMap,
+    required this.glossary,
   });
 
   @override
   Widget build(BuildContext context) {
-    final sortedItems = items.toList()
+    final sorted = items.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(categoryName),
-      ),
+      appBar: AppBar(title: Text(title)),
       body: ListView.builder(
-        itemCount: sortedItems.length,
+        itemCount: sorted.length,
         itemBuilder: (context, index) {
-          return HazardListCard(
-            item: sortedItems[index],
+          return UxoListTile(
+            item: sorted[index],
             treeUri: treeUri,
-            glossaryMap: glossaryMap,
+            glossary: glossary,
           );
         },
       ),
@@ -878,16 +825,16 @@ class CategoryScreen extends StatelessWidget {
   }
 }
 
-class HazardDetailScreen extends StatelessWidget {
-  final HazardItem item;
+class DetailScreen extends StatelessWidget {
+  final UxoItem item;
   final String treeUri;
-  final Map<String, GlossaryTerm> glossaryMap;
+  final Map<String, GlossaryItem> glossary;
 
-  const HazardDetailScreen({
+  const DetailScreen({
     super.key,
     required this.item,
     required this.treeUri,
-    required this.glossaryMap,
+    required this.glossary,
   });
 
   @override
@@ -899,54 +846,61 @@ class HazardDetailScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          HazardMainImage(item: item, treeUri: treeUri),
+          UxoImageView(item: item, treeUri: treeUri),
           const SizedBox(height: 12),
-          SectionCard(
+          InfoCard(
             title: 'Description',
             child: Text(
-              item.descriptionText.trim().isEmpty
+              item.description.trim().isEmpty
                   ? 'Aucune description disponible.'
-                  : item.descriptionText,
+                  : item.description,
               style: const TextStyle(height: 1.45),
             ),
           ),
-          SectionCard(
+          InfoCard(
             title: 'Identification',
-            child: IdentificationView(item: item),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                InfoLine(label: 'Nom', value: item.name),
+                InfoLine(label: 'Catégorie', value: item.category),
+                InfoLine(label: 'Type', value: item.type),
+                InfoLine(label: 'Pays', value: item.country),
+                InfoLine(label: 'Slug', value: item.slug),
+              ],
+            ),
           ),
           if (item.variants.isNotEmpty)
-            SectionCard(
+            InfoCard(
               title: 'Variantes',
               child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: item.variants
-                    .map((v) => Chip(label: Text(v)))
+                    .map((e) => Chip(label: Text(e)))
                     .toList(),
               ),
             ),
-          SectionCard(
-            title: 'Technologie / mots-clés',
-            child: item.technologyKeywords.isEmpty
-                ? const Text('Aucun mot-clé technique détecté.')
+          InfoCard(
+            title: 'Mots-clés',
+            child: item.keywords.isEmpty
+                ? const Text('Aucun mot-clé disponible.')
                 : Wrap(
                     spacing: 8,
                     runSpacing: 8,
-                    children: item.technologyKeywords.map((keyword) {
-                      final term = glossaryMap[keyword.toLowerCase()];
+                    children: item.keywords.map((keyword) {
+                      final term = glossary[keyword.toLowerCase()];
 
                       return ActionChip(
                         label: Text(keyword),
                         onPressed: term == null
                             ? null
-                            : () {
-                                showGlossaryDialog(context, term);
-                              },
+                            : () => showGlossaryDialog(context, term),
                       );
                     }).toList(),
                   ),
           ),
-          SectionCard(
+          InfoCard(
             title: 'Source',
             child: SelectableText(
               item.sourceUrl.trim().isEmpty
@@ -954,15 +908,14 @@ class HazardDetailScreen extends StatelessWidget {
                   : item.sourceUrl,
             ),
           ),
-          SectionCard(
+          const InfoCard(
             title: 'Sécurité',
             child: Text(
-              item.safetyNoticeFr.trim().isEmpty
-                  ? 'Ne pas toucher, déplacer, démonter, transporter ou tenter de neutraliser un objet suspect.'
-                  : item.safetyNoticeFr,
-              style: const TextStyle(
+              'Ne pas toucher, déplacer, démonter, transporter ou tenter de neutraliser un objet suspect. '
+              'Éloignez-vous et contactez les autorités compétentes.',
+              style: TextStyle(
                 height: 1.45,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -972,11 +925,11 @@ class HazardDetailScreen extends StatelessWidget {
   }
 }
 
-class HazardMainImage extends StatelessWidget {
-  final HazardItem item;
+class UxoImageView extends StatelessWidget {
+  final UxoItem item;
   final String treeUri;
 
-  const HazardMainImage({
+  const UxoImageView({
     super.key,
     required this.item,
     required this.treeUri,
@@ -984,11 +937,11 @@ class HazardMainImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final image = item.images.isEmpty ? null : item.images.first;
-
-    if (image == null || image.path.trim().isEmpty) {
-      return const ImagePlaceholder();
+    if (item.images.isEmpty) {
+      return const MissingImageBox();
     }
+
+    final image = item.images.first;
 
     return FutureBuilder<Uint8List>(
       future: NativeFolderReader.readBytes(
@@ -997,21 +950,24 @@ class HazardMainImage extends StatelessWidget {
       ),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const AspectRatio(
-            aspectRatio: 1,
+          return const SizedBox(
+            height: 260,
             child: Center(child: CircularProgressIndicator()),
           );
         }
 
         if (snapshot.hasError || snapshot.data == null) {
-          return const ImagePlaceholder();
+          return const MissingImageBox();
         }
 
         return ClipRRect(
           borderRadius: BorderRadius.circular(18),
-          child: Image.memory(
-            snapshot.data!,
-            fit: BoxFit.contain,
+          child: Container(
+            color: Colors.white,
+            child: Image.memory(
+              snapshot.data!,
+              fit: BoxFit.contain,
+            ),
           ),
         );
       },
@@ -1019,8 +975,8 @@ class HazardMainImage extends StatelessWidget {
   }
 }
 
-class ImagePlaceholder extends StatelessWidget {
-  const ImagePlaceholder({super.key});
+class MissingImageBox extends StatelessWidget {
+  const MissingImageBox({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1043,36 +999,43 @@ class ImagePlaceholder extends StatelessWidget {
   }
 }
 
-class IdentificationView extends StatelessWidget {
-  final HazardItem item;
+class InfoCard extends StatelessWidget {
+  final String title;
+  final Widget child;
 
-  const IdentificationView({
+  const InfoCard({
     super.key,
-    required this.item,
+    required this.title,
+    required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
-    final measurements = item.identification['measurements'];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InfoLine(label: 'Nom', value: item.name),
-        InfoLine(label: 'Catégorie', value: item.category),
-        if (item.countries.isNotEmpty)
-          InfoLine(label: 'Pays', value: item.countries.join(', ')),
-        if (measurements is Map && measurements.isNotEmpty)
-          ...measurements.entries.map((entry) {
-            final value = entry.value;
-
-            if (value == null || '$value'.trim().isEmpty) {
-              return const SizedBox.shrink();
-            }
-
-            return InfoLine(label: '${entry.key}', value: '$value');
-          }),
-      ],
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            color: Colors.black87,
+            fontSize: 15.5,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 10),
+              child,
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1110,47 +1073,6 @@ class InfoLine extends StatelessWidget {
   }
 }
 
-class SectionCard extends StatelessWidget {
-  final String title;
-  final Widget child;
-
-  const SectionCard({
-    super.key,
-    required this.title,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: DefaultTextStyle(
-          style: const TextStyle(
-            color: Colors.black87,
-            fontSize: 15.5,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 18,
-                ),
-              ),
-              const SizedBox(height: 12),
-              child,
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class SafetyView extends StatelessWidget {
   const SafetyView({super.key});
 
@@ -1159,20 +1081,20 @@ class SafetyView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: const [
-        SectionCard(
-          title: 'Consignes de sécurité',
+        InfoCard(
+          title: 'Consignes principales',
           child: Text(
-            'Cette application sert uniquement à la consultation, à l’identification prudente et à la sensibilisation.\n\n'
-            'Ne pas toucher, déplacer, démonter, transporter, nettoyer, photographier de près ou tenter de neutraliser une munition ou un objet suspect.\n\n'
+            'Cette application sert uniquement à la consultation hors ligne.\n\n'
+            'Ne pas toucher, déplacer, démonter, transporter, nettoyer ou tenter de neutraliser une munition ou un objet suspect.\n\n'
             'Éloignez-vous, empêchez les autres personnes de s’approcher et contactez les autorités compétentes.',
             style: TextStyle(height: 1.5),
           ),
         ),
-        SectionCard(
+        InfoCard(
           title: 'Limites',
           child: Text(
-            'Les informations peuvent être incomplètes, anciennes ou incorrectes. '
-            'Elles ne remplacent jamais une formation professionnelle, une procédure officielle ou l’intervention de spécialistes qualifiés.',
+            'Les informations peuvent être incomplètes ou incorrectes. '
+            'Elles ne remplacent jamais une procédure officielle ou l’intervention de spécialistes qualifiés.',
             style: TextStyle(height: 1.5),
           ),
         ),
@@ -1181,23 +1103,23 @@ class SafetyView extends StatelessWidget {
   }
 }
 
-void showGlossaryDialog(BuildContext context, GlossaryTerm term) {
+void showGlossaryDialog(BuildContext context, GlossaryItem item) {
   showDialog(
     context: context,
     builder: (_) {
       return AlertDialog(
-        title: Text(term.term),
+        title: Text(item.term),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (term.fullName.trim().isNotEmpty) ...[
+              if (item.fullName.trim().isNotEmpty) ...[
                 const Text(
                   'Nom complet',
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 4),
-                Text(term.fullName),
+                Text(item.fullName),
                 const SizedBox(height: 12),
               ],
               const Text(
@@ -1206,9 +1128,9 @@ void showGlossaryDialog(BuildContext context, GlossaryTerm term) {
               ),
               const SizedBox(height: 4),
               Text(
-                term.category.trim().isEmpty
+                item.category.trim().isEmpty
                     ? 'Non renseigné'
-                    : term.category,
+                    : item.category,
               ),
               const SizedBox(height: 12),
               const Text(
@@ -1217,14 +1139,9 @@ void showGlossaryDialog(BuildContext context, GlossaryTerm term) {
               ),
               const SizedBox(height: 4),
               Text(
-                term.shortDescription.trim().isEmpty
-                    ? 'Définition à compléter.'
-                    : term.shortDescription,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Apparaît dans ${term.appearsIn.length} fiche(s).',
-                style: const TextStyle(color: Colors.black54),
+                item.description.trim().isEmpty
+                    ? 'Définition non disponible.'
+                    : item.description,
               ),
             ],
           ),
@@ -1238,4 +1155,85 @@ void showGlossaryDialog(BuildContext context, GlossaryTerm term) {
       );
     },
   );
+}
+
+List<dynamic> asList(dynamic value) {
+  if (value is List) {
+    return value;
+  }
+
+  return const [];
+}
+
+int asInt(dynamic value, {int fallback = 0}) {
+  if (value is int) {
+    return value;
+  }
+
+  if (value is num) {
+    return value.toInt();
+  }
+
+  return int.tryParse('$value') ?? fallback;
+}
+
+String textOf(dynamic value) {
+  if (value == null) {
+    return '';
+  }
+
+  return '$value'.trim();
+}
+
+String textFromObject(dynamic value, {String fallback = ''}) {
+  if (value is Map) {
+    return firstNotEmpty([
+      textOf(value['name']),
+      textOf(value['title']),
+      textOf(value['slug']),
+      fallback,
+    ]);
+  }
+
+  final text = textOf(value);
+  return text.isEmpty ? fallback : text;
+}
+
+String slugFromObject(dynamic value) {
+  if (value is Map) {
+    return textOf(value['slug']);
+  }
+
+  return '';
+}
+
+List<String> asStringList(dynamic value) {
+  return asList(value)
+      .map((e) => textOf(e))
+      .where((e) => e.trim().isNotEmpty)
+      .toList();
+}
+
+String firstNotEmpty(List<String> values) {
+  for (final value in values) {
+    final trimmed = value.trim();
+
+    if (trimmed.isNotEmpty && trimmed != 'null') {
+      return trimmed;
+    }
+  }
+
+  return '';
+}
+
+String cleanText(String input) {
+  return input
+      .replaceAll(RegExp(r'<[^>]*>'), ' ')
+      .replaceAll('&nbsp;', ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#039;', "'")
+      .replaceAll('&apos;', "'")
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 }
