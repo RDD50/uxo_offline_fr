@@ -330,3 +330,5 @@ jobs:
         with:
           name: uxo-offline-fr-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+# trigger: 2026-05-26T11:16:56.883108Z
