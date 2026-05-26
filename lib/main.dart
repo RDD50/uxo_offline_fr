@@ -1065,6 +1065,403 @@ class SimilarItemTile extends StatelessWidget {
   }
 }
 
+class SimilarThumb extends StatelessWidget {
+  final UxoItem item;
+  final String treeUri;
+
+  const SimilarThumb({
+    super.key,
+    required this.item,
+    required this.treeUri,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.images.isEmpty) {
+      return thumbBox(const Icon(Icons.image_not_supported));
+    }
+
+    return FutureBuilder<Uint8List>(
+      future: NativeFolderReader.readBytes(
+        treeUri: treeUri,
+        path: item.images.first.path,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Image.memory(
+              snapshot.data!,
+              width: 122,
+              height: 96,
+              fit: BoxFit.cover,
+            ),
+          );
+        }
+
+        return thumbBox(
+          snapshot.hasError
+              ? const Icon(Icons.broken_image)
+              : const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+        );
+      },
+    );
+  }
+
+  Widget thumbBox(Widget child) {
+    return Container(
+      width: 122,
+      height: 96,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: child,
+    );
+  }
+}
+
+class UxoImageView extends StatelessWidget {
+  final UxoItem item;
+  final String treeUri;
+
+  const UxoImageView({
+    super.key,
+    required this.item,
+    required this.treeUri,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.images.isEmpty) {
+      return const MissingImageBox();
+    }
+
+    final image = item.images.first;
+
+    return FutureBuilder<Uint8List>(
+      future: NativeFolderReader.readBytes(
+        treeUri: treeUri,
+        path: image.path,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            height: 260,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.hasError || snapshot.data == null) {
+          return const MissingImageBox();
+        }
+
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            color: Colors.white,
+            child: Image.memory(
+              snapshot.data!,
+              fit: BoxFit.contain,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class MissingImageBox extends StatelessWidget {
+  const MissingImageBox({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 260,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.image_not_supported, size: 48),
+          SizedBox(height: 8),
+          Text('Image non disponible'),
+        ],
+      ),
+    );
+  }
+}
+
+class InfoCard extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const InfoCard({
+    super.key,
+    required this.title,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            color: Colors.black87,
+            fontSize: 15.5,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 10),
+              child,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class InfoLine extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const InfoLine({
+    super.key,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (value.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$label : ',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            TextSpan(text: value),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SafetyView extends StatelessWidget {
+  const SafetyView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: const [
+        InfoCard(
+          title: 'Consignes principales',
+          child: Text(
+            'Cette application sert uniquement à la consultation hors ligne.\n\n'
+            'Ne pas toucher, déplacer, démonter, transporter, nettoyer ou tenter de neutraliser une munition ou un objet suspect.\n\n'
+            'Éloignez-vous, empêchez les autres personnes de s’approcher et contactez les autorités compétentes.',
+            style: TextStyle(height: 1.5),
+          ),
+        ),
+        InfoCard(
+          title: 'Limites',
+          child: Text(
+            'Les informations peuvent être incomplètes ou incorrectes. '
+            'Elles ne remplacent jamais une procédure officielle ou l’intervention de spécialistes qualifiés.',
+            style: TextStyle(height: 1.5),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+void showGlossaryDialog(BuildContext context, GlossaryItem item) {
+  showDialog(
+    context: context,
+    builder: (_) {
+      return AlertDialog(
+        title: Text(item.term),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (item.fullName.trim().isNotEmpty) ...[
+                const Text(
+                  'Nom complet',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                Text(item.fullName),
+                const SizedBox(height: 12),
+              ],
+              const Text(
+                'Catégorie',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                item.category.trim().isEmpty
+                    ? 'Non renseigné'
+                    : item.category,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Définition',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                item.description.trim().isEmpty
+                    ? 'Définition non disponible.'
+                    : item.description,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fermer'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+List<dynamic> asList(dynamic value) {
+  if (value is List) {
+    return value;
+  }
+
+  return const [];
+}
+
+int asInt(dynamic value, {int fallback = 0}) {
+  if (value is int) {
+    return value;
+  }
+
+  if (value is num) {
+    return value.toInt();
+  }
+
+  return int.tryParse('$value') ?? fallback;
+}
+
+String textOf(dynamic value) {
+  if (value == null) {
+    return '';
+  }
+
+  return '$value'.trim();
+}
+
+String textFromObject(dynamic value, {String fallback = ''}) {
+  if (value is Map) {
+    return firstNotEmpty([
+      textOf(value['name']),
+      textOf(value['title']),
+      textOf(value['slug']),
+      fallback,
+    ]);
+  }
+
+  final text = textOf(value);
+  return text.isEmpty ? fallback : text;
+}
+
+String slugFromObject(dynamic value) {
+  if (value is Map) {
+    return textOf(value['slug']);
+  }
+
+  return '';
+}
+
+List<String> asStringList(dynamic value) {
+  return asList(value)
+      .map((e) => textOf(e))
+      .where((e) => e.trim().isNotEmpty)
+      .toList();
+}
+
+String firstNotEmpty(List<String> values) {
+  for (final value in values) {
+    final trimmed = value.trim();
+
+    if (trimmed.isNotEmpty && trimmed != 'null') {
+      return trimmed;
+    }
+  }
+
+  return '';
+}
+
+
+GlossaryItem? findGlossaryTerm(String keyword, Iterable<GlossaryItem> terms) {
+  final q = normalizeSearch(keyword);
+
+  if (q.isEmpty) {
+    return null;
+  }
+
+  GlossaryItem? best;
+  var bestScore = 0;
+
+  for (final term in terms) {
+    final termText = normalizeSearch(term.term);
+    final fullText = normalizeSearch(term.fullName);
+    final categoryText = normalizeSearch(term.category);
+    final descriptionText = normalizeSearch(term.description);
+
+    var score = 0;
+
+    if (termText == q) score += 100;
+    if (fullText == q) score += 90;
+    if (termText.contains(q) || q.contains(termText)) score += 60;
+    if (fullText.contains(q) || q.contains(fullText)) score += 45;
+    if (categoryText.contains(q)) score += 15;
+    if (descriptionText.contains(q)) score += 8;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = term;
+    }
+  }
+
+  return bestScore >= 8 ? best : null;
+}
+
 int similarityScore(UxoItem a, UxoItem b) {
   var score = 0;
 
