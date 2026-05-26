@@ -546,6 +546,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 item: items[index],
                 treeUri: treeUri!,
                 glossary: glossaryMap,
+                allItems: database!.items,
               );
             },
           ),
@@ -581,6 +582,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     items: entry.value,
                     treeUri: treeUri!,
                     glossary: glossaryMap,
+                    allItems: database!.items,
                   ),
                 ),
               );
@@ -746,12 +748,14 @@ class UxoListTile extends StatelessWidget {
   final UxoItem item;
   final String treeUri;
   final Map<String, GlossaryItem> glossary;
+  final List<UxoItem> allItems;
 
   const UxoListTile({
     super.key,
     required this.item,
     required this.treeUri,
     required this.glossary,
+    required this.allItems,
   });
 
   @override
@@ -779,6 +783,7 @@ class UxoListTile extends StatelessWidget {
                 item: item,
                 treeUri: treeUri,
                 glossary: glossary,
+                allItems: allItems,
               ),
             ),
           );
@@ -793,6 +798,7 @@ class CategoryScreen extends StatelessWidget {
   final List<UxoItem> items;
   final String treeUri;
   final Map<String, GlossaryItem> glossary;
+  final List<UxoItem> allItems;
 
   const CategoryScreen({
     super.key,
@@ -800,6 +806,7 @@ class CategoryScreen extends StatelessWidget {
     required this.items,
     required this.treeUri,
     required this.glossary,
+    required this.allItems,
   });
 
   @override
@@ -816,6 +823,7 @@ class CategoryScreen extends StatelessWidget {
             item: sorted[index],
             treeUri: treeUri,
             glossary: glossary,
+            allItems: allItems,
           );
         },
       ),
@@ -827,12 +835,14 @@ class DetailScreen extends StatelessWidget {
   final UxoItem item;
   final String treeUri;
   final Map<String, GlossaryItem> glossary;
+  final List<UxoItem> allItems;
 
   const DetailScreen({
     super.key,
     required this.item,
     required this.treeUri,
     required this.glossary,
+    required this.allItems,
   });
 
   @override
@@ -887,24 +897,35 @@ class DetailScreen extends StatelessWidget {
                     spacing: 8,
                     runSpacing: 8,
                     children: item.keywords.map((keyword) {
-                      final term = glossary[keyword.toLowerCase()];
+                      final term = findGlossaryTerm(keyword, glossary.values);
 
                       return ActionChip(
                         label: Text(keyword),
-                        onPressed: term == null
-                            ? null
-                            : () => showGlossaryDialog(context, term),
+                        onPressed: () {
+                          if (term == null) {
+                            showGlossaryDialog(
+                              context,
+                              GlossaryItem(
+                                term: keyword,
+                                fullName: '',
+                                category: 'Non trouvé',
+                                description: 'Aucune entrée de lexique correspondante trouvée pour ce mot-clé.',
+                              ),
+                            );
+                            return;
+                          }
+
+                          showGlossaryDialog(context, term);
+                        },
                       );
                     }).toList(),
                   ),
           ),
-          InfoCard(
-            title: 'Source',
-            child: SelectableText(
-              item.sourceUrl.trim().isEmpty
-                  ? 'Source non disponible.'
-                  : item.sourceUrl,
-            ),
+          SimilarItemsCard(
+            item: item,
+            allItems: allItems,
+            treeUri: treeUri,
+            glossary: glossary,
           ),
           const InfoCard(
             title: 'Sécurité',
@@ -919,6 +940,189 @@ class DetailScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+class SimilarItemsCard extends StatelessWidget {
+  final UxoItem item;
+  final List<UxoItem> allItems;
+  final String treeUri;
+  final Map<String, GlossaryItem> glossary;
+
+  const SimilarItemsCard({
+    super.key,
+    required this.item,
+    required this.allItems,
+    required this.treeUri,
+    required this.glossary,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final similar = allItems
+        .where((other) => other.id != item.id)
+        .map((other) => MapEntry(other, similarityScore(item, other)))
+        .where((entry) => entry.value > 0)
+        .toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final selected = similar.take(10).map((e) => e.key).toList();
+
+    if (selected.isEmpty) {
+      return const InfoCard(
+        title: 'Similaire',
+        child: Text('Aucun objet similaire trouvé.'),
+      );
+    }
+
+    return InfoCard(
+      title: 'Similaire',
+      child: SizedBox(
+        height: 178,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: selected.length,
+          itemBuilder: (context, index) {
+            final other = selected[index];
+            return SimilarItemTile(
+              item: other,
+              treeUri: treeUri,
+              glossary: glossary,
+              allItems: allItems,
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class SimilarItemTile extends StatelessWidget {
+  final UxoItem item;
+  final String treeUri;
+  final Map<String, GlossaryItem> glossary;
+  final List<UxoItem> allItems;
+
+  const SimilarItemTile({
+    super.key,
+    required this.item,
+    required this.treeUri,
+    required this.glossary,
+    required this.allItems,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => DetailScreen(
+                item: item,
+                treeUri: treeUri,
+                glossary: glossary,
+                allItems: allItems,
+              ),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.only(right: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SimilarThumb(item: item, treeUri: treeUri),
+              const SizedBox(height: 8),
+              Text(
+                item.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                ),
+              ),
+              if (item.category.trim().isNotEmpty)
+                Text(
+                  item.category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.black54,
+                    fontSize: 12,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SimilarThumb extends StatelessWidget {
+  final UxoItem item;
+  final String treeUri;
+
+  const SimilarThumb({
+    super.key,
+    required this.item,
+    required this.treeUri,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.images.isEmpty) {
+      return thumbBox(const Icon(Icons.image_not_supported));
+    }
+
+    return FutureBuilder<Uint8List>(
+      future: NativeFolderReader.readBytes(
+        treeUri: treeUri,
+        path: item.images.first.path,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Image.memory(
+              snapshot.data!,
+              width: 122,
+              height: 96,
+              fit: BoxFit.cover,
+            ),
+          );
+        }
+
+        return thumbBox(
+          snapshot.hasError
+              ? const Icon(Icons.broken_image)
+              : const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+        );
+      },
+    );
+  }
+
+  Widget thumbBox(Widget child) {
+    return Container(
+      width: 122,
+      height: 96,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: child,
     );
   }
 }
@@ -1222,6 +1426,73 @@ String firstNotEmpty(List<String> values) {
   }
 
   return '';
+}
+
+
+GlossaryItem? findGlossaryTerm(String keyword, Iterable<GlossaryItem> terms) {
+  final q = normalizeSearch(keyword);
+
+  if (q.isEmpty) {
+    return null;
+  }
+
+  GlossaryItem? best;
+  var bestScore = 0;
+
+  for (final term in terms) {
+    final termText = normalizeSearch(term.term);
+    final fullText = normalizeSearch(term.fullName);
+    final categoryText = normalizeSearch(term.category);
+    final descriptionText = normalizeSearch(term.description);
+
+    var score = 0;
+
+    if (termText == q) score += 100;
+    if (fullText == q) score += 90;
+    if (termText.contains(q) || q.contains(termText)) score += 60;
+    if (fullText.contains(q) || q.contains(fullText)) score += 45;
+    if (categoryText.contains(q)) score += 15;
+    if (descriptionText.contains(q)) score += 8;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = term;
+    }
+  }
+
+  return bestScore >= 8 ? best : null;
+}
+
+int similarityScore(UxoItem a, UxoItem b) {
+  var score = 0;
+
+  if (a.category.trim().isNotEmpty && a.category == b.category) {
+    score += 50;
+  }
+
+  if (a.type.trim().isNotEmpty && a.type == b.type) {
+    score += 35;
+  }
+
+  if (a.country.trim().isNotEmpty && a.country == b.country) {
+    score += 10;
+  }
+
+  final aKeywords = a.keywords.map(normalizeSearch).toSet();
+  final bKeywords = b.keywords.map(normalizeSearch).toSet();
+  final shared = aKeywords.intersection(bKeywords).where((e) => e.isNotEmpty);
+
+  score += shared.length * 6;
+
+  return score;
+}
+
+String normalizeSearch(String value) {
+  return value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9À-ÿ]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 }
 
 String cleanText(String input) {
