@@ -1,14 +1,13 @@
 name: Build Android APK
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
-  build-android:
-    name: Build APK
+  build-apk:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,11 +25,15 @@ jobs:
         with:
           channel: stable
 
+      - name: Show Flutter version
+        run: flutter --version
+
       - name: Generate Android platform files
         run: |
-          flutter create --platforms=android --project-name uxo_offline_fr .
-          rm -rf test
-          rm -f analysis_options.yaml
+          flutter create \
+            --platforms=android \
+            --project-name uxo_offline_fr \
+            .
 
       - name: Create native Android folder reader
         run: |
@@ -42,15 +45,18 @@ jobs:
           import android.app.Activity
           import android.content.Intent
           import android.net.Uri
+          import android.os.Bundle
           import android.provider.DocumentsContract
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodCall
           import io.flutter.plugin.common.MethodChannel
+          import java.io.File
 
           class MainActivity : FlutterActivity() {
               private val channelName = "uxo_offline_fr/folder_reader"
-              private val requestCodePickFolder = 8010
-              private var pendingResult: MethodChannel.Result? = null
+              private val pickFolderRequest = 9001
+              private var pendingPickResult: MethodChannel.Result? = null
 
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
@@ -61,216 +67,250 @@ jobs:
                   ).setMethodCallHandler { call, result ->
                       when (call.method) {
                           "pickFolder" -> pickFolder(result)
-
-                          "readText" -> {
-                              val args = call.arguments as? Map<*, *>
-                              val treeUri = args?.get("treeUri") as? String
-                              val path = args?.get("path") as? String
-
-                              if (treeUri == null || path == null) {
-                                  result.error("BAD_ARGS", "Arguments invalides.", null)
-                                  return@setMethodCallHandler
-                              }
-
-                              readText(treeUri, path, result)
-                          }
-
-                          "readBytes" -> {
-                              val args = call.arguments as? Map<*, *>
-                              val treeUri = args?.get("treeUri") as? String
-                              val path = args?.get("path") as? String
-
-                              if (treeUri == null || path == null) {
-                                  result.error("BAD_ARGS", "Arguments invalides.", null)
-                                  return@setMethodCallHandler
-                              }
-
-                              readBytes(treeUri, path, result)
-                          }
-
+                          "copyDatabaseToCache" -> copyDatabaseToCache(call, result)
+                          "readBytes" -> readBytes(call, result)
                           else -> result.notImplemented()
                       }
                   }
               }
 
               private fun pickFolder(result: MethodChannel.Result) {
-                  if (pendingResult != null) {
-                      result.error("BUSY", "Une sélection de dossier est déjà en cours.", null)
+                  if (pendingPickResult != null) {
+                      result.error("PICKER_BUSY", "Sélection déjà en cours", null)
                       return
                   }
 
-                  pendingResult = result
+                  pendingPickResult = result
 
                   val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                       addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                      addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                       addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                       addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
                   }
 
-                  startActivityForResult(intent, requestCodePickFolder)
+                  startActivityForResult(intent, pickFolderRequest)
               }
 
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
 
-                  if (requestCode != requestCodePickFolder) {
+                  if (requestCode != pickFolderRequest) {
                       return
                   }
 
-                  val result = pendingResult
-                  pendingResult = null
-
-                  if (result == null) {
-                      return
-                  }
+                  val result = pendingPickResult
+                  pendingPickResult = null
 
                   if (resultCode != Activity.RESULT_OK || data?.data == null) {
-                      result.error("CANCELLED", "Sélection annulée.", null)
+                      result?.success(null)
                       return
                   }
 
                   val uri = data.data!!
-                  val flags = data.flags and
-                      (Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                       Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+
+                  val flags = data.flags and (
+                      Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                      Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                  )
 
                   try {
                       contentResolver.takePersistableUriPermission(uri, flags)
                   } catch (_: Exception) {
                   }
 
-                  result.success(uri.toString())
+                  result?.success(uri.toString())
               }
 
-              private fun readText(treeUriString: String, relativePath: String, result: MethodChannel.Result) {
+              private fun copyDatabaseToCache(call: MethodCall, result: MethodChannel.Result) {
                   try {
-                      val uri = findDocumentUri(Uri.parse(treeUriString), relativePath)
+                      val treeUriText = call.argument<String>("treeUri")
+                          ?: throw Exception("treeUri manquant")
 
-                      if (uri == null) {
-                          result.error("NOT_FOUND", "Fichier introuvable : $relativePath", null)
-                          return
+                      val treeUri = Uri.parse(treeUriText)
+                      val sourceUri = findDocumentUri(treeUri, "catuxo_database.json")
+                          ?: throw Exception("catuxo_database.json introuvable")
+
+                      val outFile = File(cacheDir, "catuxo_database.json")
+
+                      contentResolver.openInputStream(sourceUri).use { input ->
+                          if (input == null) {
+                              throw Exception("Impossible d’ouvrir catuxo_database.json")
+                          }
+
+                          outFile.outputStream().use { output ->
+                              input.copyTo(output)
+                          }
                       }
 
-                      val input = contentResolver.openInputStream(uri)
-
-                      if (input == null) {
-                          result.error("READ_ERROR", "Impossible d’ouvrir : $relativePath", null)
-                          return
-                      }
-
-                      val text = input.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                      result.success(text)
+                      result.success(outFile.absolutePath)
                   } catch (e: Exception) {
-                      result.error("READ_ERROR", e.message, null)
+                      result.error("COPY_DATABASE_ERROR", e.message, null)
                   }
               }
 
-              private fun readBytes(treeUriString: String, relativePath: String, result: MethodChannel.Result) {
+              private fun readBytes(call: MethodCall, result: MethodChannel.Result) {
                   try {
-                      val uri = findDocumentUri(Uri.parse(treeUriString), relativePath)
+                      val treeUriText = call.argument<String>("treeUri")
+                          ?: throw Exception("treeUri manquant")
 
-                      if (uri == null) {
-                          result.error("NOT_FOUND", "Fichier introuvable : $relativePath", null)
-                          return
+                      val path = call.argument<String>("path")
+                          ?: throw Exception("path manquant")
+
+                      val treeUri = Uri.parse(treeUriText)
+                      val fileUri = findDocumentUri(treeUri, path)
+                          ?: throw Exception("Fichier introuvable : $path")
+
+                      contentResolver.openInputStream(fileUri).use { input ->
+                          if (input == null) {
+                              throw Exception("Impossible d’ouvrir : $path")
+                          }
+
+                          result.success(input.readBytes())
                       }
-
-                      val input = contentResolver.openInputStream(uri)
-
-                      if (input == null) {
-                          result.error("READ_ERROR", "Impossible d’ouvrir : $relativePath", null)
-                          return
-                      }
-
-                      val bytes = input.use { it.readBytes() }
-                      result.success(bytes)
                   } catch (e: Exception) {
-                      result.error("READ_ERROR", e.message, null)
+                      result.error("READ_BYTES_ERROR", e.message, null)
                   }
               }
 
               private fun findDocumentUri(treeUri: Uri, relativePath: String): Uri? {
-                  var currentDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
-
                   val cleanParts = relativePath
                       .split("/")
                       .map { it.trim() }
                       .filter { it.isNotEmpty() }
 
                   if (cleanParts.isEmpty()) {
-                      return DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocumentId)
+                      return null
                   }
 
+                  var currentDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+
                   for (part in cleanParts) {
-                      val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                          treeUri,
-                          currentDocumentId
-                      )
+                      val childId = findChildDocumentId(treeUri, currentDocumentId, part)
+                          ?: return null
 
-                      val cursor = contentResolver.query(
-                          childrenUri,
-                          arrayOf(
-                              DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                              DocumentsContract.Document.COLUMN_DOCUMENT_ID
-                          ),
-                          null,
-                          null,
-                          null
-                      )
+                      currentDocumentId = childId
+                  }
 
-                      var foundDocumentId: String? = null
+                  return DocumentsContract.buildDocumentUriUsingTree(
+                      treeUri,
+                      currentDocumentId
+                  )
+              }
 
-                      cursor?.use {
-                          val nameIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                          val idIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+              private fun findChildDocumentId(
+                  treeUri: Uri,
+                  parentDocumentId: String,
+                  wantedName: String
+              ): String? {
+                  val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                      treeUri,
+                      parentDocumentId
+                  )
 
-                          while (it.moveToNext()) {
-                              val name = it.getString(nameIndex)
-                              val id = it.getString(idIndex)
+                  val projection = arrayOf(
+                      DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                      DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                  )
 
-                              if (name == part) {
-                                  foundDocumentId = id
-                                  break
-                              }
-                          }
-                      }
-
-                      if (foundDocumentId == null) {
+                  contentResolver.query(
+                      childrenUri,
+                      projection,
+                      null,
+                      null,
+                      null
+                  ).use { cursor ->
+                      if (cursor == null) {
                           return null
                       }
 
-                      currentDocumentId = foundDocumentId!!
+                      val idIndex = cursor.getColumnIndexOrThrow(
+                          DocumentsContract.Document.COLUMN_DOCUMENT_ID
+                      )
+
+                      val nameIndex = cursor.getColumnIndexOrThrow(
+                          DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                      )
+
+                      while (cursor.moveToNext()) {
+                          val documentId = cursor.getString(idIndex)
+                          val displayName = cursor.getString(nameIndex)
+
+                          if (displayName == wantedName) {
+                              return documentId
+                          }
+                      }
                   }
 
-                  return DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocumentId)
+                  return null
               }
           }
           KOTLIN
 
       - name: Install Android SDK 36
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Get dependencies
         run: flutter pub get
 
       - name: Force app compileSdk 36
         run: |
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
-            sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 36/g' android/app/build.gradle.kts
-            grep -n "compileSdk\|targetSdk\|minSdk" android/app/build.gradle.kts
-          elif [ -f android/app/build.gradle ]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
-            sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 36/g' android/app/build.gradle
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
-            sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 36/g' android/app/build.gradle
-            grep -n "compileSdk\|targetSdk\|minSdk" android/app/build.gradle
-          else
-            find android/app -maxdepth 2 -type f | sort
-            exit 1
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = [
+              Path("android/app/build.gradle.kts"),
+              Path("android/app/build.gradle"),
+          ]
+
+          patched = False
+
+          for path in candidates:
+              if not path.exists():
+                  continue
+
+              text = path.read_text()
+              original = text
+
+              text = text.replace(
+                  "compileSdk = flutter.compileSdkVersion",
+                  "compileSdk = 36"
+              )
+              text = text.replace(
+                  "targetSdk = flutter.targetSdkVersion",
+                  "targetSdk = 36"
+              )
+              text = text.replace(
+                  "compileSdkVersion flutter.compileSdkVersion",
+                  "compileSdkVersion 36"
+              )
+              text = text.replace(
+                  "targetSdkVersion flutter.targetSdkVersion",
+                  "targetSdkVersion 36"
+              )
+
+              text = re.sub(r"compileSdk\s*=\s*\d+", "compileSdk = 36", text)
+              text = re.sub(r"targetSdk\s*=\s*\d+", "targetSdk = 36", text)
+              text = re.sub(r"compileSdkVersion\s+\d+", "compileSdkVersion 36", text)
+              text = re.sub(r"targetSdkVersion\s+\d+", "targetSdkVersion 36", text)
+
+              if text != original:
+                  path.write_text(text)
+                  patched = True
+                  print(f"Patched {path}")
+
+          if not patched:
+              raise SystemExit("Aucun fichier Gradle Android app patché")
+          PY
+
+      - name: Inspect Android files
+        run: |
+          echo "=== MainActivity ==="
+          sed -n '1,260p' android/app/src/main/kotlin/com/example/uxo_offline_fr/MainActivity.kt
+
+          echo "=== compileSdk values ==="
+          grep -R "compileSdk\|targetSdk\|minSdk" android/app || true
 
       - name: Analyze project
         run: flutter analyze --no-fatal-infos --no-fatal-warnings

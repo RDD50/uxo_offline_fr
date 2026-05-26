@@ -36,17 +36,16 @@ class NativeFolderReader {
     return _channel.invokeMethod<String>('pickFolder');
   }
 
-  static Future<String> readText({
+  static Future<String> copyDatabaseToCache({
     required String treeUri,
-    required String path,
   }) async {
     final result = await _channel.invokeMethod<String>(
-      'readText',
-      {'treeUri': treeUri, 'path': path},
+      'copyDatabaseToCache',
+      {'treeUri': treeUri},
     );
 
-    if (result == null) {
-      throw Exception('Fichier illisible : $path');
+    if (result == null || result.trim().isEmpty) {
+      throw Exception('Copie locale impossible : catuxo_database.json');
     }
 
     return result;
@@ -369,11 +368,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> loadDatabase(String uri) async {
-    final text = await NativeFolderReader.readText(
+    final cachePath = await NativeFolderReader.copyDatabaseToCache(
       treeUri: uri,
-      path: 'catuxo_database.json',
     );
 
+    final text = await File(cachePath).readAsString();
     final decoded = jsonDecode(text);
 
     if (decoded is! Map<String, dynamic>) {
