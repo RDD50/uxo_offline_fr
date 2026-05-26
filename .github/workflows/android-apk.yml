@@ -35,6 +35,9 @@ jobs:
             --project-name uxo_offline_fr \
             .
 
+          rm -rf test
+          rm -f analysis_options.yaml
+
       - name: Create native Android folder reader
         run: |
           mkdir -p android/app/src/main/kotlin/com/example/uxo_offline_fr
