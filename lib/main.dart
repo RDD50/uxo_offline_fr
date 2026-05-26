@@ -1,7 +1,11 @@
+
+cd ~/uxo_offline_app
+
+cat > lib/main.dart <<'DART'
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -22,27 +26,105 @@ class UxoOfflineApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: Colors.deepOrange,
         scaffoldBackgroundColor: const Color(0xFFF5F6FA),
-        cardTheme: CardThemeData(
-          elevation: 0,
-          color: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-        ),
       ),
       home: const HomeScreen(),
     );
   }
 }
 
+class NativeFolderReader {
+  static const MethodChannel _channel =
+      MethodChannel('uxo_offline_fr/folder_reader');
+
+  static Future<String?> pickFolder() async {
+    final result = await _channel.invokeMethod<String>('pickFolder');
+    return result;
+  }
+
+  static Future<String> readText({
+    required String treeUri,
+    required String path,
+  }) async {
+    final result = await _channel.invokeMethod<String>(
+      'readText',
+      {
+        'treeUri': treeUri,
+        'path': path,
+      },
+    );
+
+    if (result == null) {
+      throw Exception('Lecture texte impossible : $path');
+    }
+
+    return result;
+  }
+
+  static Future<Uint8List> readBytes({
+    required String treeUri,
+    required String path,
+  }) async {
+    final result = await _channel.invokeMethod<Uint8List>(
+      'readBytes',
+      {
+        'treeUri': treeUri,
+        'path': path,
+      },
+    );
+
+    if (result == null) {
+      throw Exception('Lecture image impossible : $path');
+    }
+
+    return result;
+  }
+}
+
+class FolderConfig {
+  static const String fileName = 'selected_folder_uri.txt';
+
+  static Future<File> _configFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/$fileName');
+  }
+
+  static Future<String?> loadTreeUri() async {
+    final file = await _configFile();
+
+    if (!await file.exists()) {
+      return null;
+    }
+
+    final value = await file.readAsString();
+    final trimmed = value.trim();
+
+    if (trimmed.isEmpty) {
+      return null;
+    }
+
+    return trimmed;
+  }
+
+  static Future<void> saveTreeUri(String treeUri) async {
+    final file = await _configFile();
+    await file.writeAsString(treeUri);
+  }
+
+  static Future<void> clear() async {
+    final file = await _configFile();
+
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+}
+
 class OfflineDatabase {
-  final Map<String, dynamic> databaseInfo;
   final Map<String, dynamic> stats;
   final List<HazardItem> items;
   final List<GlossaryTerm> glossary;
 
   OfflineDatabase({
-    required this.databaseInfo,
     required this.stats,
     required this.items,
     required this.glossary,
@@ -50,7 +132,6 @@ class OfflineDatabase {
 
   factory OfflineDatabase.fromJson(Map<String, dynamic> json) {
     return OfflineDatabase(
-      databaseInfo: Map<String, dynamic>.from(json['databaseInfo'] ?? {}),
       stats: Map<String, dynamic>.from(json['stats'] ?? {}),
       items: ((json['items'] ?? []) as List)
           .whereType<Map>()
@@ -76,7 +157,6 @@ class HazardItem {
   final Map<String, dynamic> identification;
   final List<String> variants;
   final List<String> technologyKeywords;
-  final List<dynamic> publicNotes;
   final String sourceUrl;
   final String safetyNoticeFr;
 
@@ -92,7 +172,6 @@ class HazardItem {
     required this.identification,
     required this.variants,
     required this.technologyKeywords,
-    required this.publicNotes,
     required this.sourceUrl,
     required this.safetyNoticeFr,
   });
@@ -112,13 +191,12 @@ class HazardItem {
           .whereType<Map>()
           .map((e) => HazardImage.fromJson(Map<String, dynamic>.from(e)))
           .toList(),
-      descriptionText: '${json['descriptionText'] ?? ''}',
+      descriptionText: stripHtml('${json['descriptionText'] ?? ''}'),
       identification:
           Map<String, dynamic>.from(json['identification'] ?? <String, dynamic>{}),
       variants: ((json['variants'] ?? []) as List).map((e) => '$e').toList(),
       technologyKeywords:
           ((json['technologyKeywords'] ?? []) as List).map((e) => '$e').toList(),
-      publicNotes: List<dynamic>.from(json['publicNotes'] ?? []),
       sourceUrl: '${json['sourceUrl'] ?? ''}',
       safetyNoticeFr: '${json['safetyNoticeFr'] ?? ''}',
     );
@@ -129,14 +207,12 @@ class HazardImage {
   final String path;
   final String caption;
   final bool isPrimary;
-  final String sourceUrl;
   final bool placeholder;
 
   HazardImage({
     required this.path,
     required this.caption,
     required this.isPrimary,
-    required this.sourceUrl,
     required this.placeholder,
   });
 
@@ -145,7 +221,6 @@ class HazardImage {
       path: '${json['path'] ?? ''}',
       caption: '${json['caption'] ?? ''}',
       isPrimary: json['isPrimary'] == true,
-      sourceUrl: '${json['sourceUrl'] ?? ''}',
       placeholder: json['placeholder'] == true,
     );
   }
@@ -157,7 +232,6 @@ class GlossaryTerm {
   final String category;
   final String shortDescription;
   final List<String> appearsIn;
-  final List<String> sourceUrls;
 
   GlossaryTerm({
     required this.term,
@@ -165,7 +239,6 @@ class GlossaryTerm {
     required this.category,
     required this.shortDescription,
     required this.appearsIn,
-    required this.sourceUrls,
   });
 
   factory GlossaryTerm.fromJson(Map<String, dynamic> json) {
@@ -175,108 +248,19 @@ class GlossaryTerm {
       category: '${json['category'] ?? ''}',
       shortDescription: '${json['shortDescription'] ?? ''}',
       appearsIn: ((json['appearsIn'] ?? []) as List).map((e) => '$e').toList(),
-      sourceUrls: ((json['sourceUrls'] ?? []) as List).map((e) => '$e').toList(),
     );
   }
 }
 
-class DatabaseStorage {
-  static const String databaseFileName = 'catuxo_database.json';
-
-  static Future<Directory> appDataDir() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final dbDir = Directory('${dir.path}/catuxo_offline_pack');
-    if (!await dbDir.exists()) {
-      await dbDir.create(recursive: true);
-    }
-    return dbDir;
-  }
-
-  static Future<File> databaseFile() async {
-    final dir = await appDataDir();
-    return File('${dir.path}/$databaseFileName');
-  }
-
-  static Future<OfflineDatabase?> loadInstalledDatabase() async {
-    final file = await databaseFile();
-
-    if (!await file.exists()) {
-      return null;
-    }
-
-    final text = await file.readAsString();
-    final jsonMap = jsonDecode(text) as Map<String, dynamic>;
-    return OfflineDatabase.fromJson(jsonMap);
-  }
-
-  static const MethodChannel _filePickerChannel =
-      MethodChannel('uxo_offline_fr/file_picker');
-
-  static Future<OfflineDatabase> importZip() async {
-    final dynamic result = await _filePickerChannel.invokeMethod('pickZip');
-
-    if (result == null) {
-      throw Exception('Aucun fichier ZIP sélectionné.');
-    }
-
-    final Uint8List bytes;
-
-    if (result is Uint8List) {
-      bytes = result;
-    } else if (result is List) {
-      bytes = Uint8List.fromList(result.cast<int>());
-    } else {
-      throw Exception('Format de fichier reçu invalide.');
-    }
-
-    final appDir = await appDataDir();
-
-    if (await appDir.exists()) {
-      await appDir.delete(recursive: true);
-    }
-
-    await appDir.create(recursive: true);
-
-    final archive = ZipDecoder().decodeBytes(bytes);
-
-    for (final file in archive.files) {
-      final outputPath = '${appDir.path}/${file.name}';
-
-      if (file.isFile) {
-        final outputFile = File(outputPath);
-        await outputFile.parent.create(recursive: true);
-        await outputFile.writeAsBytes(file.content as List<int>);
-      } else {
-        final outputDir = Directory(outputPath);
-        await outputDir.create(recursive: true);
-      }
-    }
-
-    final dbFile = await databaseFile();
-
-    if (!await dbFile.exists()) {
-      throw Exception('catuxo_database.json absent du ZIP.');
-    }
-
-    final dbText = await dbFile.readAsString();
-    final jsonMap = jsonDecode(dbText) as Map<String, dynamic>;
-    return OfflineDatabase.fromJson(jsonMap);
-  }
-
-  static Future<File?> resolveImage(HazardImage image) async {
-    if (image.path.trim().isEmpty) {
-      return null;
-    }
-
-    final dir = await appDataDir();
-    final file = File('${dir.path}/${image.path}');
-
-    if (await file.exists()) {
-      return file;
-    }
-
-    return null;
-  }
+String stripHtml(String input) {
+  return input
+      .replaceAll(RegExp(r'<[^>]*>'), ' ')
+      .replaceAll('&nbsp;', ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#039;', "'")
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 }
 
 class HomeScreen extends StatefulWidget {
@@ -294,6 +278,7 @@ enum HomeTab {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  String? treeUri;
   OfflineDatabase? database;
   bool loading = true;
   String query = '';
@@ -302,18 +287,38 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    loadDatabase();
+    loadSavedFolder();
   }
 
-  Future<void> loadDatabase() async {
+  Future<void> loadSavedFolder() async {
     setState(() {
       loading = true;
     });
 
     try {
-      final db = await DatabaseStorage.loadInstalledDatabase();
+      final savedUri = await FolderConfig.loadTreeUri();
+
+      if (savedUri == null) {
+        setState(() {
+          treeUri = null;
+          database = null;
+        });
+        return;
+      }
+
+      await loadDatabaseFromFolder(savedUri);
+    } catch (e) {
+      await FolderConfig.clear();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur lecture dossier : $e')),
+        );
+      }
+
       setState(() {
-        database = db;
+        treeUri = null;
+        database = null;
       });
     } finally {
       setState(() {
@@ -322,33 +327,24 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> importDatabase() async {
+  Future<void> chooseFolder() async {
     setState(() {
       loading = true;
     });
 
     try {
-      final db = await DatabaseStorage.importZip();
+      final selectedUri = await NativeFolderReader.pickFolder();
 
-      setState(() {
-        database = db;
-        tab = HomeTab.fiches;
-        query = '';
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Base importée : ${db.items.length} fiches.'),
-          ),
-        );
+      if (selectedUri == null || selectedUri.trim().isEmpty) {
+        throw Exception('Aucun dossier sélectionné.');
       }
+
+      await FolderConfig.saveTreeUri(selectedUri);
+      await loadDatabaseFromFolder(selectedUri);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erreur import : $e'),
-          ),
+          SnackBar(content: Text('Erreur sélection dossier : $e')),
         );
       }
     } finally {
@@ -356,6 +352,34 @@ class _HomeScreenState extends State<HomeScreen> {
         loading = false;
       });
     }
+  }
+
+  Future<void> loadDatabaseFromFolder(String selectedUri) async {
+    final text = await NativeFolderReader.readText(
+      treeUri: selectedUri,
+      path: 'catuxo_database.json',
+    );
+
+    final jsonMap = jsonDecode(text) as Map<String, dynamic>;
+    final db = OfflineDatabase.fromJson(jsonMap);
+
+    setState(() {
+      treeUri = selectedUri;
+      database = db;
+      tab = HomeTab.fiches;
+      query = '';
+    });
+  }
+
+  Future<void> resetFolder() async {
+    await FolderConfig.clear();
+
+    setState(() {
+      treeUri = null;
+      database = null;
+      query = '';
+      tab = HomeTab.fiches;
+    });
   }
 
   List<HazardItem> get filteredItems {
@@ -394,12 +418,10 @@ class _HomeScreenState extends State<HomeScreen> {
       map[category]!.add(item);
     }
 
-    final sorted = Map.fromEntries(
-      map.entries.toList()
-        ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase())),
-    );
+    final entries = map.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
 
-    return sorted;
+    return Map.fromEntries(entries);
   }
 
   Map<String, GlossaryTerm> get glossaryMap {
@@ -423,16 +445,21 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('UXO Offline FR'),
         actions: [
           IconButton(
-            onPressed: loading ? null : importDatabase,
-            icon: const Icon(Icons.upload_file),
-            tooltip: 'Importer une base',
+            onPressed: loading ? null : chooseFolder,
+            icon: const Icon(Icons.folder_open),
+            tooltip: 'Choisir le dossier de données',
+          ),
+          IconButton(
+            onPressed: loading ? null : resetFolder,
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Changer de dossier',
           ),
         ],
       ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : db == null
-              ? EmptyDatabaseView(onImport: importDatabase)
+              ? EmptyFolderView(onChooseFolder: chooseFolder)
               : Column(
                   children: [
                     DatabaseHeader(database: db),
@@ -447,7 +474,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Expanded(
                       child: switch (tab) {
                         HomeTab.fiches => buildFichesView(db),
-                        HomeTab.categories => buildCategoriesView(db),
+                        HomeTab.categories => buildCategoriesView(),
                         HomeTab.lexique => buildGlossaryView(db),
                         HomeTab.securite => const SafetyView(),
                       },
@@ -502,6 +529,7 @@ class _HomeScreenState extends State<HomeScreen> {
             itemBuilder: (context, index) {
               return HazardListCard(
                 item: items[index],
+                treeUri: treeUri!,
                 glossaryMap: glossaryMap,
               );
             },
@@ -511,9 +539,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget buildCategoriesView(OfflineDatabase db) {
-    final map = itemsByCategory;
-    final entries = map.entries.toList();
+  Widget buildCategoriesView() {
+    final entries = itemsByCategory.entries.toList();
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
@@ -537,6 +564,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (_) => CategoryScreen(
                     categoryName: entry.key,
                     items: entry.value,
+                    treeUri: treeUri!,
                     glossaryMap: glossaryMap,
                   ),
                 ),
@@ -580,12 +608,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class EmptyDatabaseView extends StatelessWidget {
-  final VoidCallback onImport;
+class EmptyFolderView extends StatelessWidget {
+  final VoidCallback onChooseFolder;
 
-  const EmptyDatabaseView({
+  const EmptyFolderView({
     super.key,
-    required this.onImport,
+    required this.onChooseFolder,
   });
 
   @override
@@ -598,10 +626,10 @@ class EmptyDatabaseView extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.folder_off, size: 56),
+              const Icon(Icons.folder_open, size: 56),
               const SizedBox(height: 16),
               const Text(
-                'Aucune base hors ligne installée',
+                'Aucun dossier de données sélectionné',
                 style: TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 20,
@@ -610,14 +638,14 @@ class EmptyDatabaseView extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Sélectionne le fichier catuxo_offline_pack.zip pour installer la base hors ligne.',
+                'Choisis le dossier catuxo_offline_pack contenant catuxo_database.json et le dossier images.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
               FilledButton.icon(
-                onPressed: onImport,
-                icon: const Icon(Icons.upload_file),
-                label: const Text('Choisir le fichier ZIP'),
+                onPressed: onChooseFolder,
+                icon: const Icon(Icons.folder_open),
+                label: const Text('Choisir le dossier de données'),
               ),
             ],
           ),
@@ -651,10 +679,22 @@ class DatabaseHeader extends StatelessWidget {
         spacing: 16,
         runSpacing: 8,
         children: [
-          StatChip(label: 'Fiches', value: '${stats['items'] ?? database.items.length}'),
-          StatChip(label: 'Lexique', value: '${stats['glossaryTerms'] ?? database.glossary.length}'),
-          StatChip(label: 'Images', value: '${stats['downloadedImages'] ?? '-'}'),
-          StatChip(label: 'Placeholder', value: '${stats['placeholderImages'] ?? '-'}'),
+          StatChip(
+            label: 'Fiches',
+            value: '${stats['items'] ?? database.items.length}',
+          ),
+          StatChip(
+            label: 'Lexique',
+            value: '${stats['glossaryTerms'] ?? database.glossary.length}',
+          ),
+          StatChip(
+            label: 'Images',
+            value: '${stats['downloadedImages'] ?? '-'}',
+          ),
+          StatChip(
+            label: 'Placeholder',
+            value: '${stats['placeholderImages'] ?? '-'}',
+          ),
         ],
       ),
     );
@@ -758,11 +798,13 @@ class TabButton extends StatelessWidget {
 
 class HazardListCard extends StatelessWidget {
   final HazardItem item;
+  final String treeUri;
   final Map<String, GlossaryTerm> glossaryMap;
 
   const HazardListCard({
     super.key,
     required this.item,
+    required this.treeUri,
     required this.glossaryMap,
   });
 
@@ -788,6 +830,7 @@ class HazardListCard extends StatelessWidget {
             MaterialPageRoute(
               builder: (_) => HazardDetailScreen(
                 item: item,
+                treeUri: treeUri,
                 glossaryMap: glossaryMap,
               ),
             ),
@@ -801,12 +844,14 @@ class HazardListCard extends StatelessWidget {
 class CategoryScreen extends StatelessWidget {
   final String categoryName;
   final List<HazardItem> items;
+  final String treeUri;
   final Map<String, GlossaryTerm> glossaryMap;
 
   const CategoryScreen({
     super.key,
     required this.categoryName,
     required this.items,
+    required this.treeUri,
     required this.glossaryMap,
   });
 
@@ -824,6 +869,7 @@ class CategoryScreen extends StatelessWidget {
         itemBuilder: (context, index) {
           return HazardListCard(
             item: sortedItems[index],
+            treeUri: treeUri,
             glossaryMap: glossaryMap,
           );
         },
@@ -834,11 +880,13 @@ class CategoryScreen extends StatelessWidget {
 
 class HazardDetailScreen extends StatelessWidget {
   final HazardItem item;
+  final String treeUri;
   final Map<String, GlossaryTerm> glossaryMap;
 
   const HazardDetailScreen({
     super.key,
     required this.item,
+    required this.treeUri,
     required this.glossaryMap,
   });
 
@@ -851,7 +899,7 @@ class HazardDetailScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          HazardMainImage(item: item),
+          HazardMainImage(item: item, treeUri: treeUri),
           const SizedBox(height: 12),
           SectionCard(
             title: 'Description',
@@ -872,7 +920,9 @@ class HazardDetailScreen extends StatelessWidget {
               child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: item.variants.map((v) => Chip(label: Text(v))).toList(),
+                children: item.variants
+                    .map((v) => Chip(label: Text(v)))
+                    .toList(),
               ),
             ),
           SectionCard(
@@ -899,7 +949,9 @@ class HazardDetailScreen extends StatelessWidget {
           SectionCard(
             title: 'Source',
             child: SelectableText(
-              item.sourceUrl.trim().isEmpty ? 'Source non disponible.' : item.sourceUrl,
+              item.sourceUrl.trim().isEmpty
+                  ? 'Source non disponible.'
+                  : item.sourceUrl,
             ),
           ),
           SectionCard(
@@ -922,25 +974,28 @@ class HazardDetailScreen extends StatelessWidget {
 
 class HazardMainImage extends StatelessWidget {
   final HazardItem item;
+  final String treeUri;
 
   const HazardMainImage({
     super.key,
     required this.item,
+    required this.treeUri,
   });
 
   @override
   Widget build(BuildContext context) {
     final image = item.images.isEmpty ? null : item.images.first;
 
-    if (image == null) {
+    if (image == null || image.path.trim().isEmpty) {
       return const ImagePlaceholder();
     }
 
-    return FutureBuilder<File?>(
-      future: DatabaseStorage.resolveImage(image),
+    return FutureBuilder<Uint8List>(
+      future: NativeFolderReader.readBytes(
+        treeUri: treeUri,
+        path: image.path,
+      ),
       builder: (context, snapshot) {
-        final file = snapshot.data;
-
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const AspectRatio(
             aspectRatio: 1,
@@ -948,16 +1003,15 @@ class HazardMainImage extends StatelessWidget {
           );
         }
 
-        if (file == null || image.placeholder) {
+        if (snapshot.hasError || snapshot.data == null) {
           return const ImagePlaceholder();
         }
 
         return ClipRRect(
           borderRadius: BorderRadius.circular(18),
-          child: Image.file(
-            file,
+          child: Image.memory(
+            snapshot.data!,
             fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const ImagePlaceholder(),
           ),
         );
       },
@@ -1151,7 +1205,11 @@ void showGlossaryDialog(BuildContext context, GlossaryTerm term) {
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
-              Text(term.category.trim().isEmpty ? 'Non renseigné' : term.category),
+              Text(
+                term.category.trim().isEmpty
+                    ? 'Non renseigné'
+                    : term.category,
+              ),
               const SizedBox(height: 12),
               const Text(
                 'Définition',
@@ -1181,4 +1239,3 @@ void showGlossaryDialog(BuildContext context, GlossaryTerm term) {
     },
   );
 }
-

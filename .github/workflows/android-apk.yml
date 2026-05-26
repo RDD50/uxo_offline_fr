@@ -32,7 +32,7 @@ jobs:
           rm -rf test
           rm -f analysis_options.yaml
 
-      - name: Create native Android ZIP picker
+      - name: Create native Android folder reader
         run: |
           mkdir -p android/app/src/main/kotlin/com/example/uxo_offline_fr
 
@@ -42,13 +42,14 @@ jobs:
           import android.app.Activity
           import android.content.Intent
           import android.net.Uri
+          import android.provider.DocumentsContract
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
 
           class MainActivity : FlutterActivity() {
-              private val channelName = "uxo_offline_fr/file_picker"
-              private val requestCodePickZip = 7010
+              private val channelName = "uxo_offline_fr/folder_reader"
+              private val requestCodePickFolder = 8010
               private var pendingResult: MethodChannel.Result? = null
 
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -58,39 +59,62 @@ jobs:
                       flutterEngine.dartExecutor.binaryMessenger,
                       channelName
                   ).setMethodCallHandler { call, result ->
-                      if (call.method == "pickZip") {
-                          if (pendingResult != null) {
-                              result.error("BUSY", "Une sélection de fichier est déjà en cours.", null)
-                              return@setMethodCallHandler
+                      when (call.method) {
+                          "pickFolder" -> pickFolder(result)
+
+                          "readText" -> {
+                              val args = call.arguments as? Map<*, *>
+                              val treeUri = args?.get("treeUri") as? String
+                              val path = args?.get("path") as? String
+
+                              if (treeUri == null || path == null) {
+                                  result.error("BAD_ARGS", "Arguments invalides.", null)
+                                  return@setMethodCallHandler
+                              }
+
+                              readText(treeUri, path, result)
                           }
 
-                          pendingResult = result
+                          "readBytes" -> {
+                              val args = call.arguments as? Map<*, *>
+                              val treeUri = args?.get("treeUri") as? String
+                              val path = args?.get("path") as? String
 
-                          val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                              addCategory(Intent.CATEGORY_OPENABLE)
-                              type = "*/*"
-                              putExtra(
-                                  Intent.EXTRA_MIME_TYPES,
-                                  arrayOf(
-                                      "application/zip",
-                                      "application/octet-stream",
-                                      "application/x-zip-compressed",
-                                      "multipart/x-zip"
-                                  )
-                              )
+                              if (treeUri == null || path == null) {
+                                  result.error("BAD_ARGS", "Arguments invalides.", null)
+                                  return@setMethodCallHandler
+                              }
+
+                              readBytes(treeUri, path, result)
                           }
 
-                          startActivityForResult(intent, requestCodePickZip)
-                      } else {
-                          result.notImplemented()
+                          else -> result.notImplemented()
                       }
                   }
+              }
+
+              private fun pickFolder(result: MethodChannel.Result) {
+                  if (pendingResult != null) {
+                      result.error("BUSY", "Une sélection de dossier est déjà en cours.", null)
+                      return
+                  }
+
+                  pendingResult = result
+
+                  val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                      addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                      addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                  }
+
+                  startActivityForResult(intent, requestCodePickFolder)
               }
 
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
 
-                  if (requestCode != requestCodePickZip) {
+                  if (requestCode != requestCodePickFolder) {
                       return
                   }
 
@@ -106,21 +130,119 @@ jobs:
                       return
                   }
 
-                  val uri: Uri = data.data!!
+                  val uri = data.data!!
+                  val flags = data.flags and
+                      (Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                       Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
 
                   try {
-                      contentResolver.openInputStream(uri).use { input ->
-                          if (input == null) {
-                              result.error("READ_ERROR", "Impossible d’ouvrir le fichier sélectionné.", null)
-                              return
-                          }
+                      contentResolver.takePersistableUriPermission(uri, flags)
+                  } catch (_: Exception) {
+                  }
 
-                          val bytes = input.readBytes()
-                          result.success(bytes)
+                  result.success(uri.toString())
+              }
+
+              private fun readText(treeUriString: String, relativePath: String, result: MethodChannel.Result) {
+                  try {
+                      val uri = findDocumentUri(Uri.parse(treeUriString), relativePath)
+
+                      if (uri == null) {
+                          result.error("NOT_FOUND", "Fichier introuvable : $relativePath", null)
+                          return
                       }
+
+                      val input = contentResolver.openInputStream(uri)
+
+                      if (input == null) {
+                          result.error("READ_ERROR", "Impossible d’ouvrir : $relativePath", null)
+                          return
+                      }
+
+                      val text = input.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                      result.success(text)
                   } catch (e: Exception) {
                       result.error("READ_ERROR", e.message, null)
                   }
+              }
+
+              private fun readBytes(treeUriString: String, relativePath: String, result: MethodChannel.Result) {
+                  try {
+                      val uri = findDocumentUri(Uri.parse(treeUriString), relativePath)
+
+                      if (uri == null) {
+                          result.error("NOT_FOUND", "Fichier introuvable : $relativePath", null)
+                          return
+                      }
+
+                      val input = contentResolver.openInputStream(uri)
+
+                      if (input == null) {
+                          result.error("READ_ERROR", "Impossible d’ouvrir : $relativePath", null)
+                          return
+                      }
+
+                      val bytes = input.use { it.readBytes() }
+                      result.success(bytes)
+                  } catch (e: Exception) {
+                      result.error("READ_ERROR", e.message, null)
+                  }
+              }
+
+              private fun findDocumentUri(treeUri: Uri, relativePath: String): Uri? {
+                  var currentDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+
+                  val cleanParts = relativePath
+                      .split("/")
+                      .map { it.trim() }
+                      .filter { it.isNotEmpty() }
+
+                  if (cleanParts.isEmpty()) {
+                      return DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocumentId)
+                  }
+
+                  for (part in cleanParts) {
+                      val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                          treeUri,
+                          currentDocumentId
+                      )
+
+                      val cursor = contentResolver.query(
+                          childrenUri,
+                          arrayOf(
+                              DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                              DocumentsContract.Document.COLUMN_DOCUMENT_ID
+                          ),
+                          null,
+                          null,
+                          null
+                      )
+
+                      var foundDocumentId: String? = null
+
+                      cursor?.use {
+                          val nameIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                          val idIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+
+                          while (it.moveToNext()) {
+                              val name = it.getString(nameIndex)
+                              val id = it.getString(idIndex)
+
+                              if (name == part) {
+                                  foundDocumentId = id
+                                  break
+                              }
+                          }
+                      }
+
+                      if (foundDocumentId == null) {
+                          return null
+                      }
+
+                      currentDocumentId = foundDocumentId!!
+                  }
+
+                  return DocumentsContract.buildDocumentUriUsingTree(treeUri, currentDocumentId)
               }
           }
           KOTLIN
