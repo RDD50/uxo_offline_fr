@@ -78,7 +78,6 @@ class NativeFolderReader {
     _bytesCache.clear();
   }
 }
-}
 
 class FolderConfig {
   static const String fileName = 'selected_folder_uri.txt';
