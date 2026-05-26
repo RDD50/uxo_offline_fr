@@ -29,10 +29,11 @@ class UxoOfflineApp extends StatelessWidget {
 }
 
 class NativeFolderReader {
-  static final Map<String, Future<Uint8List>> _bytesCache = {};
+  static const MethodChannel _channel = MethodChannel(
+    'uxo_offline_fr/folder_reader',
+  );
 
-  static const MethodChannel _channel =
-      MethodChannel('uxo_offline_fr/folder_reader');
+  static final Map<String, Future<Uint8List>> _bytesCache = {};
 
   static Future<String?> pickFolder() async {
     return _channel.invokeMethod<String>('pickFolder');
@@ -57,7 +58,7 @@ class NativeFolderReader {
     required String treeUri,
     required String path,
   }) {
-    final key = '\$treeUri|\$path';
+    final key = '$treeUri|$path';
 
     return _bytesCache.putIfAbsent(key, () async {
       final result = await _channel.invokeMethod<Uint8List>(
@@ -66,15 +67,17 @@ class NativeFolderReader {
       );
 
       if (result == null) {
-        throw Exception('Image illisible : \$path');
+        throw Exception('Image illisible : $path');
       }
 
       return result;
     });
   }
 
-    return result;
+  static void clearImageCache() {
+    _bytesCache.clear();
   }
+}
 }
 
 class FolderConfig {
