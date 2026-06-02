@@ -25,9 +25,6 @@ jobs:
         with:
           channel: stable
 
-      - name: Show Flutter version
-        run: flutter --version
-
       - name: Generate Android platform files
         run: |
           flutter create \
@@ -48,13 +45,13 @@ jobs:
           import android.app.Activity
           import android.content.Intent
           import android.net.Uri
-          import android.os.Bundle
           import android.provider.DocumentsContract
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodCall
           import io.flutter.plugin.common.MethodChannel
           import java.io.File
+          import java.security.MessageDigest
 
           class MainActivity : FlutterActivity() {
               private val channelName = "uxo_offline_fr/folder_reader"
@@ -71,7 +68,7 @@ jobs:
                       when (call.method) {
                           "pickFolder" -> pickFolder(result)
                           "copyDatabaseToCache" -> copyDatabaseToCache(call, result)
-                          "readBytes" -> readBytes(call, result)
+                          "cacheImage" -> cacheImage(call, result)
                           else -> result.notImplemented()
                       }
                   }
@@ -133,7 +130,7 @@ jobs:
                       val sourceUri = findDocumentUri(treeUri, "catuxo_database.json")
                           ?: throw Exception("catuxo_database.json introuvable")
 
-                      val outFile = File(cacheDir, "catuxo_database.json")
+                      val outFile = File(filesDir, "catuxo_database.json")
 
                       contentResolver.openInputStream(sourceUri).use { input ->
                           if (input == null) {
@@ -151,7 +148,7 @@ jobs:
                   }
               }
 
-              private fun readBytes(call: MethodCall, result: MethodChannel.Result) {
+              private fun cacheImage(call: MethodCall, result: MethodChannel.Result) {
                   try {
                       val treeUriText = call.argument<String>("treeUri")
                           ?: throw Exception("treeUri manquant")
@@ -159,19 +156,37 @@ jobs:
                       val path = call.argument<String>("path")
                           ?: throw Exception("path manquant")
 
+                      val cacheDirImages = File(cacheDir, "image_cache")
+                      if (!cacheDirImages.exists()) {
+                          cacheDirImages.mkdirs()
+                      }
+
+                      val ext = path.substringAfterLast('.', "jpg")
+                      val fileName = sha1(path) + "." + ext
+                      val outFile = File(cacheDirImages, fileName)
+
+                      if (outFile.exists() && outFile.length() > 0) {
+                          result.success(outFile.absolutePath)
+                          return
+                      }
+
                       val treeUri = Uri.parse(treeUriText)
                       val fileUri = findDocumentUri(treeUri, path)
-                          ?: throw Exception("Fichier introuvable : $path")
+                          ?: throw Exception("Image introuvable : $path")
 
                       contentResolver.openInputStream(fileUri).use { input ->
                           if (input == null) {
                               throw Exception("Impossible d’ouvrir : $path")
                           }
 
-                          result.success(input.readBytes())
+                          outFile.outputStream().use { output ->
+                              input.copyTo(output)
+                          }
                       }
+
+                      result.success(outFile.absolutePath)
                   } catch (e: Exception) {
-                      result.error("READ_BYTES_ERROR", e.message, null)
+                      result.error("CACHE_IMAGE_ERROR", e.message, null)
                   }
               }
 
@@ -246,6 +261,15 @@ jobs:
 
                   return null
               }
+
+              private fun sha1(text: String): String {
+                  val bytes = MessageDigest.getInstance("SHA-1")
+                      .digest(text.toByteArray())
+
+                  return bytes.joinToString("") {
+                      "%02x".format(it)
+                  }
+              }
           }
           KOTLIN
 
@@ -255,7 +279,7 @@ jobs:
       - name: Install Android SDK 36
         run: |
           sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
-          sdkmanager --licenses
+          yes | sdkmanager --licenses
 
       - name: Get dependencies
         run: flutter pub get
@@ -311,14 +335,6 @@ jobs:
               raise SystemExit("Aucun fichier Gradle Android app patché")
           PY
 
-      - name: Inspect Android files
-        run: |
-          echo "=== MainActivity ==="
-          sed -n '1,260p' android/app/src/main/kotlin/com/example/uxo_offline_fr/MainActivity.kt
-
-          echo "=== compileSdk values ==="
-          grep -R "compileSdk\|targetSdk\|minSdk" android/app || true
-
       - name: Analyze project
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
@@ -330,5 +346,3 @@ jobs:
         with:
           name: uxo-offline-fr-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-
-# trigger: 2026-05-26T11:16:56.883108Z
